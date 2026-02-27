@@ -1,51 +1,95 @@
+# =============================================================================
 # Complete LaunchDarkly Migration Workflow
-# Runs all steps: extract source → map members → migrate
-# This is the DEFAULT behavior if workflow.steps is not specified
+# =============================================================================
+# Runs: extract source → map members → migrate
+# Use this for a full migration (all three steps). Modify the sections below
+# before running. Required: source.projectKey, destination.projectKey.
+#
+# Run: deno task workflow -f examples/workflow-full.yaml
+# =============================================================================
 
-# Optional: Explicitly define steps (if omitted, runs all steps by default)
+# -----------------------------------------------------------------------------
+# WORKFLOW STEPS (optional)
+# -----------------------------------------------------------------------------
+# Override only if you want to skip steps. If omitted, runs: extract-source,
+# map-members, migrate. Example: use ["extract-source", "migrate"] to skip
+# member mapping.
+#
 # workflow:
 #   steps:
 #     - extract-source
 #     - map-members
 #     - migrate
 
+# -----------------------------------------------------------------------------
+# SOURCE & DESTINATION (required – modify before first run)
+# -----------------------------------------------------------------------------
+# Source = project to read from. Destination = project to write to.
+# domain: Use app.eu.launchdarkly.com for EU; otherwise app.launchdarkly.com.
+#
 source:
-  projectKey: us-production
-  domain: app.launchdarkly.com  # Optional: Defaults to app.launchdarkly.com
+  projectKey: Aman-Migration-Test
+  domain: app.launchdarkly.com
 
 destination:
-  projectKey: eu-production
-  domain: app.launchdarkly.com  # Optional: Use app.eu.launchdarkly.com for EU instance
+  projectKey: aman-migration-2
+  domain: app.launchdarkly.com
 
-# Optional: Control what data to extract from source
+# -----------------------------------------------------------------------------
+# EXTRACTION (optional – modify if you need segments)
+# -----------------------------------------------------------------------------
+# Controls what is extracted in the extract-source step.
+# includeSegments: true only if you will migrate segments (migrateSegments: true).
+# Leave commented to use defaults (flags only).
+#
 # extraction:
-#   includeSegments: true  # Uncomment to extract segments (only needed if migrateSegments: true)
+#   includeSegments: true
 
-# Optional: Configure member mapping output location
+# -----------------------------------------------------------------------------
+# MEMBER MAPPING (optional – modify to change output path)
+# -----------------------------------------------------------------------------
+# Used by the map-members step. Output file path for source → destination
+# member ID mapping. Required if assignMaintainerIds: true in migration.
+#
 memberMapping:
   outputFile: data/launchdarkly-migrations/mappings/maintainer_mapping.json
 
-# Migration configuration
+# -----------------------------------------------------------------------------
+# MIGRATION (modify to control what and how to migrate)
+# -----------------------------------------------------------------------------
+# All options below apply to the migrate step. Change before run or between
+# runs to narrow scope (e.g. includeFlags, environments) or fix conflicts.
+#
 migration:
-  # Use the member mapping we just created
+  # Assign maintainers using the mapping from map-members. Set false to skip.
   assignMaintainerIds: true
-  
-  # Include segments
+
+  # Migrate segments in addition to flags. Set false for flags-only.
   migrateSegments: true
-  
-  # Handle conflicts
-  conflictPrefix: "us-"
-  
-  # Organize in view
-  targetView: "us-migration-2024"
-  
-  # Only migrate these environments
+
+  # If a flag/key already exists in destination, create with this prefix instead.
+  # Uncomment only for initial full migration when source and destination share keys.
+  # Do NOT use with incremental sync (would create new prefixed flags instead of updating).
+  # conflictPrefix: "us-"
+
+  # Link all migrated flags to this view in destination. View created if missing.
+  # Uncomment to group migrated flags (e.g. for revert or organization).
+  # targetView: "us-migration-2024"
+
+  # Migrate only these flag keys. Comment out or remove to migrate all extracted flags.
+  # Modify when testing or migrating a subset.
+  includeFlags:
+    - config-welcome-message
+
+  # Migrate only these environments. Omit or comment out to migrate all environments.
   environments:
     - production
     - staging
-  
-  # Map environment keys if needed
+    - test
+
+  # Map source environment keys to different destination keys.
+  # Use when source and destination use different env names (e.g. prod vs production).
   environmentMapping:
     production: production
     staging: staging
-
+    test: test

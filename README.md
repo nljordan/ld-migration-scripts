@@ -49,6 +49,10 @@ root/
 │       └── reports/      # Import operation reports
 ```
 
+## Documentation
+
+- **[Migration guide (extract, migrate, revert)](docs/migration-guide.md)** – Step-by-step walkthrough of the export, migrate, and revert process, with include flags, parameters, and YAML reference.
+
 ## Multi-Region and Custom Instance Support
 
 All scripts support configurable LaunchDarkly domains to work with different instances and regions:
@@ -144,6 +148,8 @@ deno task workflow -f my-migration.yaml
 2. Map members between instances
 3. Migrate to destination
 
+To sync **only changes** after an initial migration, see [Incremental Sync (Step-by-Step)](#incremental-sync-step-by-step).
+
 ### Option 2: Individual Steps
 
 Or run migration steps individually:
@@ -209,6 +215,7 @@ The workflow orchestrator allows you to run complete end-to-end migrations from 
 
 - ✅ **Full workflow automation** - Extract → Map → Migrate in one command
 - ✅ **Selective step execution** - Run only the steps you need
+- ✅ **Incremental sync** - After an initial full migration, re-run extract + migrate to sync only changed flags, environments, and segments (see [Incremental Sync (Step-by-Step)](#incremental-sync-step-by-step))
 - ✅ **Third-party imports** - Import flags from external sources
 - ✅ **Default behavior** - Runs full workflow if no steps specified
 
@@ -325,6 +332,90 @@ migration:
     dev: development
 ```
 
+### Incremental Sync (Step-by-Step)
+
+Incremental sync lets you run a full migration once, then later sync **only** the flags, environments, and segments that changed in the source project. Use `workflow-extract-migrate-incremental.yaml` (extract + migrate, no member mapping).
+
+#### Prerequisites
+
+- [Deno](https://deno.land/) 2.0+ installed.
+- API keys in `config/api_keys.json` (source and destination).
+- Source and destination LaunchDarkly projects (and optionally matching member mapping from a full workflow).
+
+#### Step 1: Initial export (full sync)
+
+Run the full workflow **once** to create the baseline and the sync manifest. The manifest is written to `./data/launchdarkly-migrations/` and is used later to detect what changed.
+
+1. Edit `examples/workflow-full.yaml` with your `source.projectKey`, `destination.projectKey`, and `domain` (if not default).
+2. Run:
+
+   ```bash
+   deno task workflow -f examples/workflow-full.yaml
+   ```
+
+   This runs **extract-source** → **map-members** → **migrate**. The migrate step performs a full migration and writes the sync manifest. You will not see per-flag **UPDATES** blocks during this run (those appear only during incremental sync).
+
+#### Step 2: Make changes in the source project
+
+In the LaunchDarkly UI (or via API), change the source project: edit a flag (on/off, rules, targeting), add a flag, or change segments/environments. Only those changes will be synced in the next step.
+
+#### Step 3: Sync incrementals
+
+Re-extract the source and migrate only what changed.
+
+1. Edit `examples/workflow-extract-migrate-incremental.yaml` with the **same** `source` and `destination` (and domains) as in Step 1.
+2. Run:
+
+   ```bash
+   deno task workflow -f examples/workflow-extract-migrate-incremental.yaml
+   ```
+
+   This runs **extract-source** (overwrites the previous extract with current source data) then **migrate** with `incremental: true`. The migrate step compares against the sync manifest and updates only flags, environments, and segments that changed since the last run.
+
+#### What you'll see
+
+- **Progress:** `[N/M] Processing flag: <key>` for each flag.
+- **Unchanged:** Lines like `✓ <key>: unchanged (v...), skipping` and `✓ <env>: unchanged (v...), skipping` for resources that were not modified.
+- **Changed (incremental runs only):** For each updated flag/environment, a detailed **UPDATES** block:
+  - `UPDATES`
+  - `Flag Key: <key>`
+  - `Environment: <env>`
+  - `Keys: archived, contextTargets, fallthrough, ...`  
+  These blocks appear **only** when you run the migrate step with `--incremental` (e.g. via `workflow-extract-migrate-incremental.yaml`); they are not shown during the initial full export.
+- **End of run:** A **MIGRATION SUMMARY** (including whether conflicts were encountered) and a **MIGRATION RESULT** box with flags created, flags updated, flags total, and total time. The line *"More detailed changes per flag are logged above"* refers to the UPDATES blocks when running incrementally.
+
+#### Config reference: Extract + Migrate (Incremental)
+
+```yaml
+# workflow-extract-migrate-incremental.yaml
+workflow:
+  steps:
+    - extract-source
+    - migrate
+
+source:
+  projectKey: my-source-project
+  domain: app.launchdarkly.com
+
+destination:
+  projectKey: my-dest-project
+  domain: app.launchdarkly.com
+
+extraction:
+  includeSegments: true
+
+migration:
+  migrateSegments: true
+  assignMaintainerIds: false
+  incremental: true   # First run: full sync + create manifest; later runs: sync only changes
+```
+
+```bash
+deno task workflow -f examples/workflow-extract-migrate-incremental.yaml
+```
+
+**Optional:** Set `migration.dryRun: true` in the YAML to preview what would be synced without applying changes to the destination.
+
 ### Workflow Configuration Structure
 
 ```yaml
@@ -358,6 +449,7 @@ migration:                   # Optional - for migrate step
   environmentMapping:
     sourceEnv: destEnv
   dryRun: boolean           # Preview changes without applying
+  incremental: boolean     # Skip unchanged flags/envs/segments (version-based); see Incremental Sync
 
 thirdPartyImport:           # Required for third-party-import step
   inputFile: string          # JSON or CSV file path
@@ -407,6 +499,7 @@ By default, segments are **not** extracted unless explicitly needed, preventing 
 
 - `examples/workflow-full.yaml` - Complete workflow (default behavior)
 - `examples/workflow-extract-only.yaml` - Extract source data only
+- `examples/workflow-extract-migrate-incremental.yaml` - Extract + migrate with incremental sync (only changed flags/envs/segments on subsequent runs)
 - `examples/workflow-migrate-only.yaml` - Migrate with pre-extracted data
 - `examples/workflow-third-party.yaml` - Third-party flag import
 - `examples/workflow-custom-steps.yaml` - Custom step combinations
@@ -548,6 +641,7 @@ deno task migrate -p SOURCE_PROJECT -d DEST_PROJECT -v my-target-view
 **Notes:**
 - Views are an Early Access feature in LaunchDarkly
 - If a view already exists in the destination, it will be reused
+- **You can create the intended view in the destination project before migrating** (e.g. in the LaunchDarkly UI); the script will detect it and link flags to it without creating a duplicate
 - View associations are preserved from the source project
 - The `-v` flag adds an additional view linkage (doesn't replace existing ones)
 
@@ -960,6 +1054,10 @@ don't need to specify them manually.
 - `-v, --targetView`: (Optional) View key to link all migrated flags to. This
   will link all flags to the specified view in addition to any views they were
   already linked to in the source project.
+- `--include-flags`: (Optional) Comma-separated list of flag keys to migrate
+  (e.g., 'my-flag,other-flag'). If not specified, all flags from the extracted
+  source are migrated. Only flag keys that exist in the extracted data are used;
+  others are skipped with a warning.
 - `-e, --environments`: (Optional) Comma-separated list of environment keys to
   migrate (e.g., 'production,staging'). If not specified, all environments will
   be migrated. Useful for selective environment migration or testing.

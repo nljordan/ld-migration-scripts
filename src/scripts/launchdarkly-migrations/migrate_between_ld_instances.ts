@@ -36,6 +36,7 @@ interface Arguments {
   dryRun?: boolean;
   incremental?: boolean;
   since?: string;
+  includeFlags?: string;
 }
 
 interface SyncManifestEnv {
@@ -189,6 +190,7 @@ const cliArgs: Arguments = (yargs(Deno.args)
   .alias("dry-run", "dryRun")
   .alias("i", "incremental")
   .alias("since", "since")
+  .alias("include-flags", "includeFlags")
   .boolean("m")
   .boolean("s")
   .boolean("dry-run")
@@ -204,6 +206,7 @@ const cliArgs: Arguments = (yargs(Deno.args)
   .describe("dry-run", "Preview migration without making any changes")
   .describe("incremental", "Skip flags unchanged since last sync (version-based)")
   .describe("since", "Only sync flags modified after this date (ISO 8601, e.g. 2026-01-15)")
+  .describe("include-flags", "Comma-separated list of flag keys to migrate (default: all extracted flags)")
   .parse() as unknown) as Arguments;
 
 // Load and merge config file if provided
@@ -268,6 +271,7 @@ console.log(Colors.gray(`  Domain: ${inputArgs.domain || 'app.launchdarkly.com'}
 console.log(Colors.gray(`  Dry Run: ${inputArgs.dryRun || false}`));
 console.log(Colors.gray(`  Incremental: ${inputArgs.incremental || false}`));
 console.log(Colors.gray(`  Since: ${inputArgs.since || 'none'}`));
+console.log(Colors.gray(`  Include flags: ${inputArgs.includeFlags || 'all'}`));
 
 // Validate --incremental and --since are mutually exclusive
 if (inputArgs.incremental && inputArgs.since) {
@@ -509,10 +513,22 @@ if (!flagList) {
   console.log(Colors.red(`❌ Error: Could not load flag list from ./data/launchdarkly-migrations/source/project/${inputArgs.projKeySource}/flags.json`));
   Deno.exit(1);
 }
-console.log(Colors.green(`✓ Loaded ${flagList.length} flags`));
+let flagsToMigrate: Array<string> = flagList;
+if (inputArgs.includeFlags) {
+  const requested = inputArgs.includeFlags.split(',').map((k) => k.trim()).filter(Boolean);
+  const availableSet = new Set(flagList);
+  const notFound = requested.filter((k) => !availableSet.has(k));
+  if (notFound.length > 0) {
+    console.log(Colors.yellow(`⚠ Requested flag(s) not in extracted source (skipped): ${notFound.join(', ')}`));
+  }
+  flagsToMigrate = requested.filter((k) => availableSet.has(k));
+  console.log(Colors.green(`✓ Include flags filter: ${flagsToMigrate.length} of ${flagList.length} flags will be migrated`));
+} else {
+  console.log(Colors.green(`✓ Loaded ${flagList.length} flags`));
+}
 
 console.log("Extracting view associations from source flags...");
-for (const flagkey of flagList) {
+for (const flagkey of flagsToMigrate) {
   const flag = await getJson(
     `./data/launchdarkly-migrations/source/project/${inputArgs.projKeySource}/flags/${flagkey}.json`,
   );
@@ -528,6 +544,9 @@ if (inputArgs.targetView) {
   console.log(Colors.cyan(`Target view specified: "${inputArgs.targetView}"`));
 }
 
+// View keys that exist in destination (only link flags to these)
+const destinationViewKeys = new Set<string>();
+
 if (allViewKeys.size > 0) {
   console.log(`Found ${allViewKeys.size} unique view(s) to create/verify: ${Array.from(allViewKeys).join(', ')}`);
   
@@ -539,6 +558,7 @@ if (allViewKeys.size > 0) {
     
     if (viewExists) {
       console.log(Colors.green(`  ✓ View "${viewKey}" already exists`));
+      destinationViewKeys.add(viewKey);
     } else {
       console.log(`  Creating view "${viewKey}"...`);
       const viewData: View = {
@@ -551,6 +571,7 @@ if (allViewKeys.size > 0) {
       
       if (result.success) {
         console.log(Colors.green(`  ✓ View "${viewKey}" created successfully`));
+        destinationViewKeys.add(viewKey);
       } else {
         console.log(Colors.yellow(`  ⚠ Failed to create view "${viewKey}": ${result.error}`));
       }
@@ -1301,10 +1322,14 @@ interface Variation {
 }
 
 // Creating Global Flags //
-console.log(Colors.blue(`\n🏁 Creating ${flagList.length} flags in destination project...\n`));
-for (const [index, flagkey] of flagList.entries()) {
+let flagsCreatedCount = 0;
+let flagsUpdatedCount = 0;
+const flagsUpdatedKeys: string[] = [];
+const migrationStartTime = Date.now();
+console.log(Colors.blue(`\n🏁 Creating ${flagsToMigrate.length} flags in destination project...\n`));
+for (const [index, flagkey] of flagsToMigrate.entries()) {
   // Read flag
-  console.log(Colors.cyan(`\n[${index + 1}/${flagList.length}] Processing flag: ${flagkey}`));
+  console.log(Colors.cyan(`\n[${index + 1}/${flagsToMigrate.length}] Processing flag: ${flagkey}`));
 
   const flag = await getJson(
     `./data/launchdarkly-migrations/source/project/${inputArgs.projKeySource}/flags/${flagkey}.json`,
@@ -1438,6 +1463,8 @@ for (const [index, flagkey] of flagList.entries()) {
         flagCreated = true;
         flagAlreadyExisted = true;
         createdFlagKey = flagKey;
+        flagsUpdatedCount++;
+        flagsUpdatedKeys.push(createdFlagKey);
         console.log(Colors.gray(`\t⚠ Flag already exists, will update environments...`));
       }
     } else if (checkFlagResp.status === 404) {
@@ -1494,18 +1521,16 @@ for (const [index, flagkey] of flagList.entries()) {
     // Skip the creation POST if flag already exists
     if (!flagAlreadyExisted) {
       // Collect view associations for flag creation
-      // API supports "viewKeys" (plural, array) field during creation (NO beta header needed)
+      // Only include view keys that exist in destination to avoid "View key not found" 400
       const viewKeys: string[] = [];
       
-      // Add target view if specified (highest priority)
-      if (inputArgs.targetView) {
+      if (inputArgs.targetView && destinationViewKeys.has(inputArgs.targetView)) {
         viewKeys.push(inputArgs.targetView);
       }
       
-      // Add source flag's view associations (if not already added)
       if (flag.viewKeys && Array.isArray(flag.viewKeys)) {
         flag.viewKeys.forEach((viewKey: string) => {
-          if (!viewKeys.includes(viewKey)) {
+          if (destinationViewKeys.has(viewKey) && !viewKeys.includes(viewKey)) {
             viewKeys.push(viewKey);
           }
         });
@@ -1529,6 +1554,7 @@ for (const [index, flagkey] of flagList.entries()) {
   if (flagResp.status == 200 || flagResp.status == 201) {
         flagCreated = true;
         createdFlagKey = flagKey;
+        flagsCreatedCount++;
         if (viewKeys.length > 0) {
           console.log(Colors.green(`\t✓ Created and linked to view(s): ${viewKeys.join(', ')}`));
         } else {
@@ -1553,6 +1579,8 @@ for (const [index, flagkey] of flagList.entries()) {
           // No prefix or second attempt - flag exists, proceed to update it
           flagCreated = true;
           createdFlagKey = flagKey;
+          flagsUpdatedCount++;
+          flagsUpdatedKeys.push(createdFlagKey);
           console.log(Colors.gray(`\t⚠ Flag exists (409), will update environments...`));
           break; // Exit retry loop and proceed to patching
     }
@@ -1704,6 +1732,16 @@ for (const [index, flagkey] of flagList.entries()) {
         }
       });
       await makePatchCall(createdFlagKey, patchReq, destEnvKey, flagMaintainerId, currentMemberId, destinationVariations, destinationFlag);
+
+      // Log UPDATES for this environment only during incremental sync (not during initial export)
+      if (inputArgs.incremental) {
+        const updatedKeys = Object.keys(parsedData).join(', ');
+        console.log(Colors.gray(`  ─────────────────────────────────────`));
+        console.log(Colors.cyan(`  UPDATES`));
+        console.log(Colors.gray(`  Flag Key: ${createdFlagKey}`));
+        console.log(Colors.gray(`  Environment: ${destEnvKey}`));
+        console.log(Colors.gray(`  Keys: ${updatedKeys}`));
+      }
 
     // Track env version in manifest
     if (envVersion !== undefined) {
@@ -1900,3 +1938,35 @@ printMigrationSummary(
   flagsWithErrors,
   conflictTracker.getReport()
 );
+
+// Final migration summary banner and result box
+const totalTimeSec = ((Date.now() - migrationStartTime) / 1000).toFixed(1);
+const conflictReportText = conflictTracker.getReport();
+const noConflicts = !conflictReportText || conflictReportText.trim() === '';
+
+console.log(Colors.blue(`\n======================================================================`));
+console.log(Colors.blue(`📊 MIGRATION SUMMARY`));
+console.log(Colors.blue(`======================================================================`));
+if (noConflicts) {
+  console.log(Colors.gray(`No conflicts encountered during migration.`));
+} else {
+  console.log(Colors.yellow(`Conflicts were resolved (see conflict report above).`));
+}
+console.log(Colors.blue(`\n======================================================================`));
+console.log(Colors.green(`✓ Migration complete successfully`));
+console.log(Colors.blue(`======================================================================\n`));
+
+console.log(Colors.cyan(`  ┌─────────────────────────────────────────`));
+console.log(Colors.cyan(`  │  MIGRATION RESULT`));
+console.log(Colors.cyan(`  ├─────────────────────────────────────────`));
+console.log(Colors.cyan(`  │  flags created        ${String(flagsCreatedCount).padStart(6)}`));
+console.log(Colors.cyan(`  │  flags updated        ${String(flagsUpdatedCount).padStart(6)}`));
+console.log(Colors.cyan(`  │  flags total          ${String(flagsCreatedCount + flagsUpdatedCount).padStart(6)}`));
+console.log(Colors.cyan(`  │  total time        ${totalTimeSec.padStart(5)}s`));
+console.log(Colors.cyan(`  └─────────────────────────────────────────\n`));
+if (flagsUpdatedKeys.length > 0) {
+  console.log(Colors.cyan(`  Flags updated: ${flagsUpdatedKeys.join(", ")}`));
+  console.log(Colors.gray(`  See above for details per flag.`));
+} else {
+  console.log(Colors.gray(`  More detailed changes per flag are logged above.`));
+}

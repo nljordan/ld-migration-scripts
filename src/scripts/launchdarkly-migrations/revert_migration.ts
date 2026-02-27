@@ -197,7 +197,7 @@ const ldAPIDeleteRequest = (apiKey: string, domain: string, path: string) => {
 };
 
 /**
- * Creates a PATCH request for LaunchDarkly API
+ * Creates a PATCH request for LaunchDarkly API (JSON Patch format, not semantic patch)
  */
 const ldAPIPatchRequest = (
   apiKey: string,
@@ -207,7 +207,7 @@ const ldAPIPatchRequest = (
   useBetaVersion = false
 ) => {
   const headers: Record<string, string> = {
-    "Content-Type": "application/json; domain-model=launchdarkly.semanticpatch",
+    "Content-Type": "application/json",
     "Authorization": apiKey,
     "User-Agent": "launchdarkly-migration-revert-script",
   };
@@ -372,6 +372,14 @@ const discoverMigrationFlags = async (
         config.projectKey,
         sourceFlags
       );
+      
+      const foundKeys = new Set(destinationFlags.map(f => f.key));
+      const notFoundInDest = sourceFlags.filter(k => !foundKeys.has(k));
+      if (notFoundInDest.length > 0) {
+        console.log(Colors.yellow(
+          `  ${notFoundInDest.length} flag(s) from source were not found in destination (skipped): ${notFoundInDest.join(", ")}`
+        ));
+      }
       
       console.log(Colors.gray(`  Found ${destinationFlags.length} matching flag(s) in destination`));
       
@@ -735,17 +743,23 @@ const archiveFlag = async (
   projectKey: string,
   flagKey: string,
   dryRun: boolean
-): Promise<boolean> => {
+): Promise<{ success: boolean; errorMessage?: string }> => {
   if (dryRun) {
     console.log(Colors.gray(`  [DRY RUN] Would archive flag ${flagKey}`));
-    return true;
+    return { success: true };
   }
   
   const patch = [{ op: "replace", path: "/archived", value: true }];
   const req = ldAPIPatchRequest(apiKey, domain, `flags/${projectKey}/${flagKey}`, patch);
   
   const response = await rateLimitRequest(req, 'flags');
-  return response.status >= 200 && response.status < 300;
+  if (response.status >= 200 && response.status < 300) {
+    return { success: true };
+  }
+  
+  const body = await response.text();
+  const errorMessage = `HTTP ${response.status}${body ? `: ${body}` : ""}`;
+  return { success: false, errorMessage };
 };
 
 /**
@@ -757,15 +771,21 @@ const deleteFlag = async (
   projectKey: string,
   flagKey: string,
   dryRun: boolean
-): Promise<boolean> => {
+): Promise<{ success: boolean; errorMessage?: string }> => {
   if (dryRun) {
     console.log(Colors.gray(`  [DRY RUN] Would delete flag ${flagKey}`));
-    return true;
+    return { success: true };
   }
   
   const req = ldAPIDeleteRequest(apiKey, domain, `flags/${projectKey}/${flagKey}`);
   const response = await rateLimitRequest(req, 'flags');
-  return response.status === 204 || response.status === 200;
+  if (response.status === 204 || response.status === 200) {
+    return { success: true };
+  }
+  
+  const body = await response.text();
+  const errorMessage = `HTTP ${response.status}${body ? `: ${body}` : ""}`;
+  return { success: false, errorMessage };
 };
 
 // ==================== Revert Orchestration ====================
@@ -808,7 +828,7 @@ const revertFlag = async (
     }
     
     // 2. Archive flag
-    const archived = await archiveFlag(
+    const archiveResult = await archiveFlag(
       apiKey,
       domain,
       config.projectKey,
@@ -816,15 +836,17 @@ const revertFlag = async (
       config.dryRun || false
     );
     
-    if (archived) {
+    if (archiveResult.success) {
       stats.flagsArchived++;
       console.log(Colors.green(`  ✓ Archived flag`));
     } else {
-      console.log(Colors.yellow(`  ⚠ Could not archive flag`));
+      const msg = `Flag ${flag.key}: could not archive${archiveResult.errorMessage ? ` - ${archiveResult.errorMessage}` : ""}`;
+      stats.errors.push(msg);
+      console.log(Colors.red(`  ✗ ${msg}`));
     }
     
-    // 3. Delete flag
-    const deleted = await deleteFlag(
+    // 3. Delete flag (only if archive succeeded, so we don't try to delete twice on failure)
+    const deleteResult = await deleteFlag(
       apiKey,
       domain,
       config.projectKey,
@@ -832,11 +854,13 @@ const revertFlag = async (
       config.dryRun || false
     );
     
-    if (deleted) {
+    if (deleteResult.success) {
       stats.flagsDeleted++;
       console.log(Colors.green(`  ✓ Deleted flag`));
     } else {
-      console.log(Colors.yellow(`  ⚠ Could not delete flag`));
+      const msg = `Flag ${flag.key}: could not delete${deleteResult.errorMessage ? ` - ${deleteResult.errorMessage}` : ""}`;
+      stats.errors.push(msg);
+      console.log(Colors.red(`  ✗ ${msg}`));
     }
     
   } catch (error) {
@@ -937,16 +961,19 @@ const printRevertSummary = (config: RevertConfig, stats: RevertStats): void => {
   }
   
   console.log(Colors.cyan("\nStatistics:"));
-  console.log(Colors.gray(`  Flags checked: ${stats.flagsChecked}`));
+  console.log(Colors.gray(`  Flags checked (source/destination): ${stats.flagsChecked}`));
   console.log(Colors.cyan(`  Migration flags identified: ${stats.flagsIdentified}`));
-  console.log(Colors.green(`  Approval requests deleted: ${stats.approvalsDeleted}`));
-  console.log(Colors.green(`  View links removed: ${stats.viewLinksRemoved}`));
-  console.log(Colors.green(`  Flags archived: ${stats.flagsArchived}`));
-  console.log(Colors.green(`  Flags deleted: ${stats.flagsDeleted}`));
-  console.log(Colors.green(`  Views deleted: ${stats.viewsDeleted}`));
+  console.log(Colors.green(`  Flags reverted (archived + deleted): ${stats.flagsDeleted} / ${stats.flagsIdentified}`));
+  if (stats.flagsIdentified > 0 && stats.flagsDeleted < stats.flagsIdentified) {
+    const notReverted = stats.flagsIdentified - stats.flagsDeleted;
+    console.log(Colors.yellow(`  ${notReverted} flag(s) could not be reverted (see errors below)`));
+  }
+  console.log(Colors.gray(`  Approval requests deleted: ${stats.approvalsDeleted}`));
+  console.log(Colors.gray(`  View links removed: ${stats.viewLinksRemoved}`));
+  console.log(Colors.gray(`  Views deleted: ${stats.viewsDeleted}`));
   
   if (stats.errors.length > 0) {
-    console.log(Colors.red(`\n❌ Errors encountered: ${stats.errors.length}`));
+    console.log(Colors.red(`\n❌ Errors / failures (${stats.errors.length}):`));
     stats.errors.forEach(err => {
       console.log(Colors.red(`  • ${err}`));
     });
@@ -959,7 +986,7 @@ const printRevertSummary = (config: RevertConfig, stats: RevertStats): void => {
   } else if (stats.errors.length === 0) {
     console.log(Colors.green("✓ Revert completed successfully"));
   } else {
-    console.log(Colors.yellow("⚠ Revert completed with errors"));
+    console.log(Colors.yellow("⚠ Revert completed with errors (see above for details)"));
   }
   
   console.log(Colors.blue(`${divider}\n`));
