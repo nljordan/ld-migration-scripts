@@ -24,9 +24,9 @@ export interface ImportFlag {
   name?: string;
   description?: string;
   kind: "boolean" | "string" | "number" | "json";
-  variations: (boolean | string | number | any)[];
-  defaultOnVariation: boolean | string | number | any;
-  defaultOffVariation: boolean | string | number | any;
+  variations: (boolean | string | number | unknown)[];
+  defaultOnVariation: boolean | string | number | unknown;
+  defaultOffVariation: boolean | string | number | unknown;
   tags?: string[];
 }
 
@@ -35,7 +35,7 @@ export interface LaunchDarklyFlag {
   name?: string;
   description?: string;
   kind: "boolean" | "string" | "number" | "json";
-  variations: Array<{ value: any }>;
+  variations: Array<{ value: unknown }>;
   defaults: {
     onVariation: number;
     offVariation: number;

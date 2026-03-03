@@ -1,4 +1,3 @@
-// deno-lint-ignore-file no-explicit-any
 /**
  * LaunchDarkly Migration Workflow Orchestrator
  * 
@@ -7,53 +6,17 @@
  */
 
 import yargs from "https://deno.land/x/yargs@v17.7.2-deno/deno.ts";
-import { parse as parseYaml } from "https://deno.land/std@0.224.0/yaml/parse.ts";
 import * as Colors from "https://deno.land/std@0.149.0/fmt/colors.ts";
-
-// ==================== Type Definitions ====================
-
-interface WorkflowConfig {
-  workflow?: {
-    steps?: string[];
-  };
-  source: {
-    projectKey: string;
-    domain?: string;
-  };
-  destination?: {
-    projectKey: string;
-    domain?: string;
-  };
-  extraction?: {
-    includeSegments?: boolean;
-  };
-  memberMapping?: {
-    outputFile?: string;
-  };
-  migration?: {
-    assignMaintainerIds?: boolean;
-    migrateSegments?: boolean;
-    conflictPrefix?: string;
-    targetView?: string;
-    environments?: string[];
-    environmentMapping?: Record<string, string>;
-    dryRun?: boolean;
-    incremental?: boolean;
-    since?: string;
-  };
-  thirdPartyImport?: {
-    inputFile: string;
-    targetProject: string;
-    dryRun?: boolean;
-    upsert?: boolean;
-    reportOutput?: string;
-  };
-  revert?: {
-    dryRun?: boolean;
-    deleteViews?: boolean;
-    viewKeys?: string[];
-  };
-}
+import {
+  type WorkflowConfig,
+  parseWorkflowConfig,
+  getWorkflowSteps,
+  buildExtractSourceArgs,
+  buildMapMembersArgs,
+  buildMigrateArgs,
+  buildThirdPartyImportArgs,
+  buildRevertArgs,
+} from "./workflow_helpers.ts";
 
 interface Arguments {
   config: string;
@@ -61,10 +24,6 @@ interface Arguments {
 
 type StepName = 'extract-source' | 'map-members' | 'migrate' | 'third-party-import' | 'revert';
 type CommandOptions = { args: string[]; stdout: "inherit"; stderr: "inherit" };
-
-// ==================== Configuration ====================
-
-const DEFAULT_WORKFLOW_STEPS: StepName[] = ["extract-source", "map-members", "migrate"];
 
 const inputArgs: Arguments = yargs(Deno.args)
   .alias("f", "config")
@@ -80,10 +39,10 @@ const inputArgs: Arguments = yargs(Deno.args)
 const loadConfig = async (configPath: string): Promise<WorkflowConfig> => {
   try {
     const configContent = await Deno.readTextFile(configPath);
-    return parseYaml(configContent) as WorkflowConfig;
-  } catch (error) {
+    return parseWorkflowConfig(configContent);
+  } catch (_error) {
     console.log(Colors.red(
-      `Error loading config file: ${error instanceof Error ? error.message : String(error)}`
+      `Error loading config file: ${_error instanceof Error ? _error.message : String(_error)}`
     ));
     Deno.exit(1);
   }
@@ -132,54 +91,7 @@ const printStepCompletion = (message: string): void => {
   console.log(Colors.green(`\n✓ ${message}\n`));
 };
 
-// ==================== Step Builders ====================
-
-/**
- * Builds base Deno run command args
- */
-const buildBaseRunArgs = (scriptPath: string, permissions: string[]): string[] => [
-  "run",
-  ...permissions,
-  scriptPath
-];
-
-/**
- * Conditionally adds arguments if value exists
- */
-const addOptionalArg = (args: string[], flag: string, value?: string): string[] =>
-  value ? [...args, flag, value] : args;
-
-/**
- * Conditionally adds a boolean flag if true
- */
-const addBooleanFlag = (args: string[], flag: string, condition?: boolean): string[] =>
-  condition ? [...args, flag] : args;
-
 // ==================== Extract Source Step ====================
-
-/**
- * Builds arguments for extract source command
- */
-const buildExtractSourceArgs = (config: WorkflowConfig): string[] => {
-  const baseArgs = buildBaseRunArgs(
-    "src/scripts/launchdarkly-migrations/source_from_ld.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
-  );
-
-  let args = [...baseArgs, "-p", config.source.projectKey];
-  args = addOptionalArg(args, "--domain", config.source.domain);
-  
-  // Only extract segments if explicitly enabled AND migration will use them
-  const shouldExtractSegments = 
-    config.extraction?.includeSegments === true || 
-    config.migration?.migrateSegments === true;
-  
-  if (shouldExtractSegments) {
-    args = [...args, "--extract-segments=true"];
-  }
-  
-  return args;
-};
 
 /**
  * Runs the extract source data step
@@ -192,20 +104,6 @@ const runExtractSource = async (config: WorkflowConfig): Promise<void> => {
 };
 
 // ==================== Map Members Step ====================
-
-/**
- * Builds arguments for map members command
- */
-const buildMapMembersArgs = (config: WorkflowConfig): string[] => {
-  const baseArgs = buildBaseRunArgs(
-    "src/scripts/launchdarkly-migrations/map_members_between_ld_instances.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
-  );
-
-  const withOutput = addOptionalArg(baseArgs, "-o", config.memberMapping?.outputFile);
-  const withSourceDomain = addOptionalArg(withOutput, "--source-domain", config.source.domain);
-  return addOptionalArg(withSourceDomain, "--dest-domain", config.destination?.domain);
-};
 
 /**
  * Runs the member mapping step
@@ -227,56 +125,6 @@ const validateMigrationConfig = (config: WorkflowConfig): void => {
     console.log(Colors.red("Error: Destination project key is required for migration step"));
     Deno.exit(1);
   }
-};
-
-/**
- * Formats environment mapping as command argument
- */
-const formatEnvMapping = (mapping: Record<string, string>): string =>
-  Object.entries(mapping)
-    .map(([k, v]) => `${k}:${v}`)
-    .join(",");
-
-/**
- * Builds migration-specific arguments
- */
-const buildMigrationArgs = (config: WorkflowConfig): string[] => {
-  const migration = config.migration || {};
-  let args: string[] = [];
-
-  args = addBooleanFlag(args, "-m", migration.assignMaintainerIds);
-  args = addBooleanFlag(args, "-s=false", migration.migrateSegments === false);
-  args = addBooleanFlag(args, "--dry-run", migration.dryRun);
-  args = addBooleanFlag(args, "--incremental", migration.incremental);
-  args = addOptionalArg(args, "-c", migration.conflictPrefix);
-  args = addOptionalArg(args, "-v", migration.targetView);
-  args = addOptionalArg(args, "-e", migration.environments?.join(","));
-  args = addOptionalArg(args, "--since", migration.since);
-
-  if (migration.environmentMapping) {
-    args = addOptionalArg(args, "--env-map", formatEnvMapping(migration.environmentMapping));
-  }
-
-  return args;
-};
-
-/**
- * Builds complete migration command arguments
- */
-const buildMigrateArgs = (config: WorkflowConfig): string[] => {
-  const baseArgs = buildBaseRunArgs(
-    "src/scripts/launchdarkly-migrations/migrate_between_ld_instances.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
-  );
-
-  const withProjects = [
-    ...baseArgs,
-    "-p", config.source.projectKey,
-    "-d", config.destination!.projectKey
-  ];
-
-  const withMigrationOpts = [...withProjects, ...buildMigrationArgs(config)];
-  return addOptionalArg(withMigrationOpts, "--domain", config.destination?.domain);
 };
 
 /**
@@ -303,29 +151,6 @@ const validateThirdPartyConfig = (config: WorkflowConfig): void => {
 };
 
 /**
- * Builds arguments for third-party import command
- */
-const buildThirdPartyImportArgs = (config: WorkflowConfig): string[] => {
-  const importConfig = config.thirdPartyImport!;
-  
-  const baseArgs = buildBaseRunArgs(
-    "src/scripts/third-party-migrations/import_flags_from_external.ts",
-    ["--allow-net", "--allow-read", "--allow-write", "--allow-env"]
-  );
-
-  const withRequiredArgs = [
-    ...baseArgs,
-    "-f", importConfig.inputFile,
-    "-p", importConfig.targetProject
-  ];
-
-  const withDryRun = addBooleanFlag(withRequiredArgs, "-d", importConfig.dryRun);
-  const withUpsert = addBooleanFlag(withDryRun, "-u", importConfig.upsert);
-  const withOutput = addOptionalArg(withUpsert, "-o", importConfig.reportOutput);
-  return addOptionalArg(withOutput, "--domain", config.destination?.domain);
-};
-
-/**
  * Runs the third-party import step
  */
 const runThirdPartyImport = async (config: WorkflowConfig): Promise<void> => {
@@ -349,38 +174,12 @@ const validateRevertConfig = (config: WorkflowConfig): void => {
 };
 
 /**
- * Builds arguments for revert command
- */
-const buildRevertArgs = (config: WorkflowConfig): string[] => {
-  const revertConfig = config.revert || {};
-  
-  const baseArgs = buildBaseRunArgs(
-    "src/scripts/launchdarkly-migrations/revert_migration.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
-  );
-
-  // Use the config file itself as the -f parameter (revert reads from it)
-  const withConfigFile = [...baseArgs, "-f", inputArgs.config];
-  
-  // Add optional flags
-  let args = addBooleanFlag(withConfigFile, "--dry-run", revertConfig.dryRun);
-  args = addBooleanFlag(args, "--delete-views", revertConfig.deleteViews);
-  
-  // Add view keys if specified
-  if (revertConfig.viewKeys && revertConfig.viewKeys.length > 0) {
-    args = addOptionalArg(args, "-v", revertConfig.viewKeys.join(","));
-  }
-  
-  return args;
-};
-
-/**
  * Runs the revert step
  */
 const runRevert = async (config: WorkflowConfig): Promise<void> => {
   printStepHeader("STEP", "Revert Migration");
   validateRevertConfig(config);
-  const args = buildRevertArgs(config);
+  const args = buildRevertArgs(config, inputArgs.config);
   await executeCommand(args, "Revert step");
   printStepCompletion("Revert completed");
 };
@@ -451,12 +250,6 @@ const printWorkflowCompletion = (): void => {
   console.log(Colors.green("✓ Workflow completed successfully!"));
   console.log(Colors.green(`${divider}\n`));
 };
-
-/**
- * Gets workflow steps from config or uses defaults
- */
-const getWorkflowSteps = (config: WorkflowConfig): string[] =>
-  config.workflow?.steps || DEFAULT_WORKFLOW_STEPS;
 
 // ==================== Main Entry Point ====================
 

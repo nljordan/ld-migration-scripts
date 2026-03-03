@@ -110,7 +110,7 @@ if (inputArgs.extractSegments && allEnvironments.length > 0) {
     const segmentPageSize: number = 50;
     let segmentOffset: number = 0;
     let moreSegments: boolean = true;
-    const allSegments: any[] = [];
+    const allSegments: unknown[] = [];
     let segmentPath = `segments/${inputArgs.projKey}/${env.key}?limit=${segmentPageSize}&offset=${segmentOffset}`;
     
     while (moreSegments) {
@@ -184,7 +184,7 @@ while (moreFlags) {
 
   const flagsData = await flagsResp.json();
 
-  flags.push(...flagsData.items.map((flag: any) => flag.key));
+  flags.push(...flagsData.items.map((flag: { key: string }) => flag.key));
 
   if (flagsData._links.next) {
     offset += pageSize;

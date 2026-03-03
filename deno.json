@@ -5,6 +5,11 @@
   "description": "LaunchDarkly Project Migration Scripts - Support for LD-to-LD migrations and third-party flag imports",
   "license": "Apache-2.0",
   "deno": ">=2.0.0",
+  "lint": {
+    "rules": {
+      "exclude": ["no-import-prefix"]
+    }
+  },
   "compilerOptions": {
     "lib": [
       "deno.window",
@@ -26,6 +31,8 @@
     "version:show": "./scripts/check-version.sh",
     "version:bump:patch": "./scripts/bump-version.sh patch",
     "version:bump:minor": "./scripts/bump-version.sh minor",
-    "version:bump:major": "./scripts/bump-version.sh major"
+    "version:bump:major": "./scripts/bump-version.sh major",
+    "test": "deno test --allow-read --allow-env --allow-net --allow-run",
+    "test:e2e": "deno test --allow-read --allow-net --allow-run --allow-env tests/e2e/"
   }
 }

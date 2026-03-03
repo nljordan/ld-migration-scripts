@@ -13,8 +13,8 @@
 import yargs from "https://deno.land/x/yargs@v17.7.2-deno/deno.ts";
 import * as Colors from "https://deno.land/std@0.149.0/fmt/colors.ts";
 import { parse as parseYaml } from "https://deno.land/std@0.224.0/yaml/parse.ts";
-import { ldAPIRequest, ldAPIPostRequest, rateLimitRequest } from "../../utils/utils.ts";
-import { getDestinationApiKey, getSourceApiKey } from "../../utils/api_keys.ts";
+import { ldAPIRequest, rateLimitRequest } from "../../utils/utils.ts";
+import { getDestinationApiKey } from "../../utils/api_keys.ts";
 
 // ==================== Type Definitions ====================
 
@@ -99,9 +99,9 @@ const loadMigrationConfig = async (configPath: string): Promise<MigrationWorkflo
   try {
     const configContent = await Deno.readTextFile(configPath);
     return parseYaml(configContent) as MigrationWorkflowConfig;
-  } catch (error) {
+  } catch (_error) {
     console.log(Colors.red(
-      `Error loading config file: ${error instanceof Error ? error.message : String(error)}`
+      `Error loading config file: ${_error instanceof Error ? _error.message : String(_error)}`
     ));
     Deno.exit(1);
   }
@@ -251,7 +251,7 @@ const loadFlagListFromSourceData = async (sourceProjectKey: string): Promise<str
     
     console.log(Colors.yellow(`Warning: Unexpected format in ${flagsPath}`));
     return [];
-  } catch (error) {
+  } catch (_error) {
     console.log(Colors.yellow(
       `Warning: Could not load source data from ${flagsPath}: ${error}`
     ));
@@ -281,7 +281,7 @@ const fetchFlagByKey = async (
     
     // Flag doesn't exist (404) or other error
     return null;
-  } catch (error) {
+  } catch (_error) {
     console.log(Colors.gray(`  Warning: Could not fetch flag ${flagKey}: ${error}`));
     return null;
   }
@@ -446,7 +446,7 @@ const fetchFlagApprovalRequests = async (
         }));
         allRequests.push(...envRequests);
       }
-    } catch (error) {
+    } catch (_error) {
       // Environment might not exist or no permissions, continue
       console.log(Colors.gray(`  Warning: Could not fetch approvals for ${env}`));
     }
@@ -532,7 +532,7 @@ const fetchProjectViews = async (
       const data = await response.json();
       return data.items || [];
     }
-  } catch (error) {
+  } catch (_error) {
     console.log(Colors.yellow(`Warning: Could not fetch views: ${error}`));
   }
   
@@ -573,7 +573,7 @@ const fetchFlagViews = async (
       const errorText = await response.text();
       console.log(Colors.yellow(`      DEBUG: Error - ${errorText}`));
     }
-  } catch (error) {
+  } catch (_error) {
     if (debug) {
       console.log(Colors.yellow(`      DEBUG: Exception - ${error}`));
     }
@@ -586,7 +586,7 @@ const fetchFlagViews = async (
  * Finds flags linked to a view by checking each flag individually
  * This is a fallback when the /views/{viewKey}/linked/flags endpoint fails
  */
-const findFlagsLinkedToView = async (
+const _findFlagsLinkedToView = async (
   apiKey: string,
   domain: string,
   projectKey: string,
@@ -634,7 +634,7 @@ const unlinkFlagFromView = async (
     
     const response = await rateLimitRequest(req, 'views');
     return response.status === 204 || response.status === 200;
-  } catch (error) {
+  } catch (_error) {
     console.log(Colors.red(`  Error unlinking ${flagKey} from view: ${error}`));
     return false;
   }
@@ -695,7 +695,7 @@ const deleteView = async (
     
     const response = await rateLimitRequest(req, 'views');
     return response.status === 204 || response.status === 200;
-  } catch (error) {
+  } catch (_error) {
     console.log(Colors.red(`  Error deleting view ${viewKey}: ${error}`));
     return false;
   }
@@ -719,7 +719,7 @@ const fetchProjectEnvironments = async (
       const data = await response.json();
       return (data.items || []).map((env: any) => env.key);
     }
-  } catch (error) {
+  } catch (_error) {
     console.log(Colors.yellow(`Warning: Could not fetch environments: ${error}`));
   }
   
@@ -839,7 +839,7 @@ const revertFlag = async (
       console.log(Colors.yellow(`  ⚠ Could not delete flag`));
     }
     
-  } catch (error) {
+  } catch (_error) {
     const errorMsg = `Error processing flag ${flag.key}: ${error}`;
     stats.errors.push(errorMsg);
     console.log(Colors.red(`  ✗ ${errorMsg}`));
@@ -1051,8 +1051,8 @@ const main = async (): Promise<void> => {
     // 6. Print summary
     printRevertSummary(config, stats);
     
-  } catch (error) {
-    console.log(Colors.red(`\n❌ Fatal error: ${error instanceof Error ? error.message : String(error)}`));
+  } catch (_error) {
+    console.log(Colors.red(`\n❌ Fatal error: ${_error instanceof Error ? _error.message : String(_error)}`));
     Deno.exit(1);
   }
 };

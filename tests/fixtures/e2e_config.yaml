@@ -1,0 +1,18 @@
+# E2E workflow config. In CI, set LD_E2E_SOURCE_PROJECT, LD_E2E_DEST_PROJECT (and
+# LD_E2E_API_KEY). The e2e test injects these into a temp config at runtime.
+workflow:
+  steps:
+    - extract-source
+    - migrate
+source:
+  projectKey: PLACEHOLDER_SOURCE
+  domain: app.launchdarkly.com
+destination:
+  projectKey: PLACEHOLDER_DEST
+  domain: app.launchdarkly.com
+extraction:
+  includeSegments: true
+migration:
+  migrateSegments: true
+  assignMaintainerIds: false
+  dryRun: true

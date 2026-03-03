@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Cache Deno
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno
+          key: deno-${{ hashFiles('deno.json', 'config/import_map.json') }}
+          restore-keys: deno-
+
+      - name: Lint
+        run: deno lint
+
+      - name: Format check
+        run: deno fmt --check
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Cache Deno
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno
+          key: deno-${{ hashFiles('deno.json', 'config/import_map.json') }}
+          restore-keys: deno-
+
+      - name: Tests
+        run: deno task test
+
+  e2e:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.LD_E2E_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Cache Deno
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno
+          key: deno-${{ hashFiles('deno.json', 'config/import_map.json') }}
+          restore-keys: deno-
+
+      - name: Create API key config for e2e
+        run: |
+          echo '{ "source_account_api_key": "${{ secrets.LD_E2E_API_KEY }}", "destination_account_api_key": "${{ secrets.LD_E2E_API_KEY }}" }' > config/api_keys.json
+
+      - name: E2E tests
+        env:
+          LD_E2E_API_KEY: ${{ secrets.LD_E2E_API_KEY }}
+          LD_E2E_SOURCE_PROJECT: ${{ secrets.LD_E2E_SOURCE_PROJECT }}
+          LD_E2E_DEST_PROJECT: ${{ secrets.LD_E2E_DEST_PROJECT }}
+        run: deno task test:e2e

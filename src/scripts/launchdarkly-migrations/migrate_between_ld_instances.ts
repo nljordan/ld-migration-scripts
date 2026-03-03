@@ -2,7 +2,6 @@
 import yargs from "https://deno.land/x/yargs@v17.7.2-deno/deno.ts";
 import {
   buildPatch,
-  buildRules,
   buildRulesReplace,
   consoleLogger,
   getJson,
@@ -89,7 +88,7 @@ interface MigrationConfig {
 /**
  * Simulates an API POST request in dry-run mode
  */
-function simulatePostRequest(resource: string, data: any): Response {
+function simulatePostRequest(resource: string, _data: unknown): Response {
   console.log(Colors.gray(`    [DRY RUN] Would POST to ${resource}`));
   return new Response(JSON.stringify({ success: true, _id: 'dry-run-id' }), { 
     status: 201,
@@ -238,8 +237,8 @@ if (cliArgs.config) {
     };
     
     console.log(Colors.green(`✓ Configuration loaded successfully\n`));
-  } catch (error) {
-    console.log(Colors.red(`Error loading config file: ${error instanceof Error ? error.message : String(error)}`));
+  } catch (_error) {
+    console.log(Colors.red(`Error loading config file: ${_error instanceof Error ? _error.message : String(_error)}`));
     Deno.exit(1);
   }
 }
@@ -300,7 +299,7 @@ try {
   } else {
     console.log(Colors.gray(`Authenticated with service token (approval requests may not notify anyone)`));
   }
-} catch (error) {
+} catch (_error) {
   console.log(Colors.gray(`Could not determine authenticated user type`));
 }
 
@@ -342,8 +341,8 @@ if (inputArgs.assignMaintainerIds) {
   try {
   maintainerMapping = await getJson("./data/launchdarkly-migrations/mappings/maintainer_mapping.json") || {};
     console.log(Colors.green(`✓ Loaded maintainer mapping with ${Object.keys(maintainerMapping).length} entries`));
-  } catch (error) {
-    console.log(Colors.yellow(`⚠ Warning: Could not load maintainer mapping file: ${error}`));
+  } catch (_error) {
+    console.log(Colors.yellow(`⚠ Warning: Could not load maintainer mapping file: ${_error}`));
     console.log(Colors.yellow(`  Continuing without maintainer mapping...`));
   }
 } else {
@@ -411,7 +410,6 @@ if (inputArgs.environments) {
 // If mapping is provided, filter to only mapped source environments
 if (inputArgs.envMap) {
   const mappedSourceEnvs = Object.keys(envMapping);
-  const originalEnvCount = envkeys.length;
   envkeys = envkeys.filter(key => mappedSourceEnvs.includes(key));
   
   if (envkeys.length === 0) {
@@ -909,7 +907,7 @@ const convertPatchToSemanticInstruction = (
  */
 const convertToSemanticPatch = (
   jsonPatches: any[],
-  envKey: string,
+  _envKey: string,
   variations: any[]
 ): ConversionResult => {
   const getVariationId = createVariationMapper(variations);
@@ -1128,7 +1126,7 @@ const handleApprovalWorkflow = async (
       console.log(Colors.gray(`\t    API response: ${errorBody}`));
       flagsWithErrors.add(flagKey);
     }
-  } catch (error) {
+  } catch (_error) {
     console.log(Colors.red(`\t  ✗ ${env}: Error creating approval request`));
     flagsWithErrors.add(flagKey);
   }
@@ -1163,9 +1161,9 @@ const handlePatchResponse = async (
  * Returns true if changes are needed, false if environment is already in desired state
  */
 const wouldPatchChangeEnvironment = (
-  currentEnvConfig: any,
-  patchOperations: any[],
-  variations: any[]
+  currentEnvConfig: unknown,
+  patchOperations: unknown[],
+  _variations: unknown[]
 ): boolean => {
   // If no current config, changes are needed
   if (!currentEnvConfig) return true;
@@ -1444,7 +1442,7 @@ for (const [index, flagkey] of flagList.entries()) {
       // Flag doesn't exist, we'll create it
       flagAlreadyExisted = false;
     }
-  } catch (error) {
+  } catch (_error) {
     // If check fails, proceed with creation attempt
     console.log(Colors.gray(`\t  Could not check if flag exists, will attempt creation...`));
   }
@@ -1590,7 +1588,7 @@ for (const [index, flagkey] of flagList.entries()) {
           destinationVariations = destinationFlag.variations;
         }
       }
-    } catch (error) {
+    } catch (_error) {
       console.log(Colors.yellow(`\t⚠ Could not fetch destination flag, using source IDs (may cause issues with approval requests and skip detection)`));
     }
 
@@ -1735,8 +1733,8 @@ try {
   const segCount = Object.values(updatedManifestSegments).reduce((sum, envSegs) => sum + Object.keys(envSegs).length, 0);
   const segPart = segCount > 0 ? `, ${segCount} segments` : '';
   console.log(Colors.green(`\n✓ Sync manifest written to ${syncManifestPath} (${Object.keys(manifest.flags).length} flags, ${envCount} environments${segPart} tracked)`));
-} catch (error) {
-  console.log(Colors.yellow(`\n⚠ Could not write sync manifest: ${error instanceof Error ? error.message : String(error)}`));
+} catch (_error) {
+  console.log(Colors.yellow(`\n⚠ Could not write sync manifest: ${_error instanceof Error ? _error.message : String(_error)}`));
 }
 
 if (incrementalSkipCount > 0 || incrementalEnvSkipCount > 0 || incrementalSegmentSkipCount > 0) {
