@@ -1,62 +1,94 @@
+# =============================================================================
 # Revert and Re-migrate Workflow
+# =============================================================================
+# Runs: revert (clean up previous migration) → migrate (run migration again).
+# Use when you need to undo a migration and then re-run with different settings,
+# or to clean up a failed/partial migration before trying again.
 #
-# Use this pattern when you need to:
-# 1. Clean up a failed or partial migration
-# 2. Re-run the migration with corrected settings
+# Run: deno task workflow -f examples/workflow-revert-and-migrate.yaml
 #
-# Usage:
-#   deno task workflow -f workflow-revert-and-migrate.yaml
+# When to modify:
+#   - Before first run: set source/destination to match your migration.
+#   - revert.dryRun / migration.dryRun: set true to preview; set false to execute.
+#   - migration.*: same options as other workflows (includeFlags, environments, etc.).
+#
+# Recommended: Run once with dryRun: true for both revert and migration, then
+# set both to false and run again to execute.
+# =============================================================================
 
 workflow:
   steps:
-    - revert      # First, clean up the previous migration
-    - migrate     # Then, run the migration again
+    - revert   # Step 1: Remove migrated flags (and optionally views) from destination
+    - migrate  # Step 2: Run migration again (e.g. with corrected settings)
 
+# -----------------------------------------------------------------------------
+# SOURCE & DESTINATION (required – must match the migration you are reverting)
+# -----------------------------------------------------------------------------
+# source.projectKey: project that was the source of the migration (used to
+#   identify which flags to revert via extracted source data).
+# destination.projectKey: project where flags were migrated (flags are deleted here).
+#
 source:
-  projectKey: source-project
+  projectKey: Aman-Migration-Test
   domain: app.launchdarkly.com
 
 destination:
-  projectKey: dest-project
+  projectKey: aman-migration-2
   domain: app.launchdarkly.com
 
-# Revert configuration
+# -----------------------------------------------------------------------------
+# REVERT (modify to control cleanup behavior)
+# -----------------------------------------------------------------------------
+# Revert uses extracted source data to find migrated flags, then archives/deletes
+# them in destination and optionally removes view links.
+#
 revert:
-  # Preview the revert first (recommended!)
+  # true = preview only (no changes). false = execute revert. Set false after reviewing.
   dryRun: true
-  
-  # Delete the view after unlinking flags
+
+  # Set true to delete the target view(s) after unlinking all flags. Optional.
   # deleteViews: true
-  
-  # Optional: Only process specific views
+
+  # Only revert flags linked to these views. Omit to use migration.targetView
+  # from the original migration config (or all migrated flags from source data).
   # viewKeys:
   #   - migration-view-1
 
-# Migration configuration
+# -----------------------------------------------------------------------------
+# MIGRATION (modify to control the re-migration after revert)
+# -----------------------------------------------------------------------------
+# Same options as other workflow files. Use to re-migrate with different
+# includeFlags, environments, conflictPrefix, etc.
+#
 migration:
   assignMaintainerIds: true
   migrateSegments: true
-  targetView: "migration-2024"
-  
-  # Preview the migration (recommended after revert preview!)
+
+  # View to link migrated flags to. Uncomment if you use a target view.
+  # targetView: "migration-2024"
+
+  # Migrate only these flag keys. Comment out to migrate all extracted flags.
+  includeFlags:
+    - config-welcome-message
+
+  # true = preview only. false = execute migration. Set false after reviewing.
   dryRun: true
-  
-  # Optional: Add conflict prefix
+
+  # Only for initial full migration when keys collide. Do NOT use with incremental sync.
   # conflictPrefix: "migrated-"
-  
-  # Optional: Limit to specific environments
+
   # environments:
   #   - production
   #   - staging
-  
-  # Optional: Map environment keys
+
   # environmentMapping:
   #   prod: production
   #   stage: staging
 
-# Workflow execution order:
-# 1. Revert (with dryRun: true) - Preview cleanup
-# 2. Migrate (with dryRun: true) - Preview re-migration
-# 
-# Then change both dryRun values to false and run again to execute
-
+# -----------------------------------------------------------------------------
+# EXECUTION ORDER
+# -----------------------------------------------------------------------------
+# 1. Revert runs (dryRun: true → preview; dryRun: false → delete flags/cleanup).
+# 2. Migrate runs (dryRun: true → preview; dryRun: false → create flags).
+# After confirming preview output, set revert.dryRun and migration.dryRun to
+# false and run the workflow again to apply changes.

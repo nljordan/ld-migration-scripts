@@ -40,6 +40,7 @@ interface WorkflowConfig {
     dryRun?: boolean;
     incremental?: boolean;
     since?: string;
+    includeFlags?: string[];
   };
   thirdPartyImport?: {
     inputFile: string;
@@ -252,6 +253,7 @@ const buildMigrationArgs = (config: WorkflowConfig): string[] => {
   args = addOptionalArg(args, "-v", migration.targetView);
   args = addOptionalArg(args, "-e", migration.environments?.join(","));
   args = addOptionalArg(args, "--since", migration.since);
+  args = addOptionalArg(args, "--include-flags", migration.includeFlags?.join(","));
 
   if (migration.environmentMapping) {
     args = addOptionalArg(args, "--env-map", formatEnvMapping(migration.environmentMapping));

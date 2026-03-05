@@ -13,16 +13,16 @@
 #   deno task revert -f examples/revert-migration-example.yaml  # Execute the revert
 
 source:
-  projectKey: slack-app
-  domain: app.ld.catamorphic.com
+  projectKey: Aman-Migration-Test
+  domain: app.launchdarkly.com
 
 destination:
-  projectKey: default
-  domain: app.ld.catamorphic.com
+  projectKey: aman-migration-2
+  domain: app.launchdarkly.com
 
 migration:
   # The view that was created during migration
-  targetView: "slack-app"
+  #targetView: "slack-app"
 
 # Note: When using --config/-f with the revert tool:
 # - source.projectKey: Used to identify which flags to revert

@@ -1,24 +1,63 @@
-# Full sync: extract + migrate (no incremental)
-# Run this FIRST to create the sync manifest. Then use workflow-nick-jordan-incremental.yaml
-# to test incremental (re-extract + migrate with --incremental).
+# =============================================================================
+# Extract + Migrate (Incremental Sync)
+# =============================================================================
+# Runs: extract-source → migrate (no map-members).
+# Use for incremental syncs: run once for full sync (creates manifest), then
+# re-run after source changes to sync only what changed. Requires existing
+# sync manifest from a previous run when incremental: true.
+#
+# Run: deno task workflow -f examples/workflow-extract-migrate-incremental.yaml
+#
+# When to modify:
+#   - Before first run: set source/destination, extraction, migration options.
+#   - For incremental: keep incremental: true and re-run after source changes.
+#   - For full sync: same; first run creates the manifest for future incremental.
+# =============================================================================
 
 workflow:
   steps:
     - extract-source
     - migrate
 
+# -----------------------------------------------------------------------------
+# SOURCE & DESTINATION (required – modify before first run)
+# -----------------------------------------------------------------------------
 source:
-  projectKey: 
+  projectKey: Aman-Migration-Test
   domain: app.launchdarkly.com
 
 destination:
-  projectKey:   
+  projectKey: aman-migration-2
   domain: app.launchdarkly.com
 
+# -----------------------------------------------------------------------------
+# EXTRACTION (optional – modify if you need segments)
+# -----------------------------------------------------------------------------
+# includeSegments: true only if migrateSegments: true below.
+#
 extraction:
   includeSegments: true
 
+# -----------------------------------------------------------------------------
+# MIGRATION (modify to control what and how to migrate)
+# -----------------------------------------------------------------------------
+# incremental: true = skip flags/envs unchanged since last sync (uses manifest).
+# Include flags: limit to specific flags; comment out to migrate all extracted.
+#
+# IMPORTANT: Do not set conflictPrefix when using incremental sync. With
+# conflictPrefix on, the script would create new prefixed flags instead of
+# updating existing ones, breaking incremental updates.
+#
 migration:
   migrateSegments: true
   assignMaintainerIds: false
-  incremental: true  # Full sync; creates sync manifest for incremental runs
+
+  # Keep true for incremental sync. First run creates manifest; later runs sync only changes.
+  incremental: true
+
+  # Do NOT use conflictPrefix with incremental: true (would create new flags each run).
+  # conflictPrefix: "us-"
+
+  # Migrate only these flag keys. Comment out to migrate all extracted flags.
+  includeFlags:
+    - config-welcome-message
