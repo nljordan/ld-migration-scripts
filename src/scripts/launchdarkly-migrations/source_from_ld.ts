@@ -228,5 +228,5 @@ for (const [index, flagKey] of flags.entries()) {
 
   const flagData = await flagResp.json();
 
-  await writeSourceData(`${projPath}/flags`, flagKey, flagData);
+  await writeSourceData(`${projPath}/flags`, String(index), flagData);
 }

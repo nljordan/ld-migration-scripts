@@ -483,11 +483,9 @@ if (!flagList) {
 console.log(Colors.green(`✓ Loaded ${flagList.length} flags`));
 
 console.log("Extracting view associations from source flags...");
-for (const flagkey of flagList) {
-  const flag = await getJson(
-    `./data/launchdarkly-migrations/source/project/${inputArgs.projKeySource}/flags/${flagkey}.json`,
-  );
-  
+const flagsDir = `./data/launchdarkly-migrations/source/project/${inputArgs.projKeySource}/flags`;
+for (const [idx, flagkey] of flagList.entries()) {
+  const flag = await getJson(`${flagsDir}/${idx}.json`) ?? await getJson(`${flagsDir}/${flagkey}.json`);
   if (flag && flag.viewKeys && Array.isArray(flag.viewKeys)) {
     flag.viewKeys.forEach((viewKey: string) => allViewKeys.add(viewKey));
   }
@@ -1277,9 +1275,8 @@ for (const [index, flagkey] of flagList.entries()) {
   // Read flag
   console.log(Colors.cyan(`\n[${index + 1}/${flagList.length}] Processing flag: ${flagkey}`));
 
-  const flag = await getJson(
-    `./data/launchdarkly-migrations/source/project/${inputArgs.projKeySource}/flags/${flagkey}.json`,
-  );
+  const flagsDir = `./data/launchdarkly-migrations/source/project/${inputArgs.projKeySource}/flags`;
+  const flag = await getJson(`${flagsDir}/${index}.json`) ?? await getJson(`${flagsDir}/${flagkey}.json`);
 
   if (!flag) {
     console.log(Colors.yellow(`\tWarning: Could not load flag data for ${flagkey}, skipping...`));
