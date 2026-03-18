@@ -7,6 +7,7 @@ import {
   consoleLogger,
   ldAPIRequest,
   rateLimitRequest,
+  sha256HexUtf8,
   writeSourceData,
 } from "../../utils/utils.ts";
 import { Semaphore } from "../../utils/semaphore.ts";
@@ -227,6 +228,6 @@ await Promise.all(
     }
 
     const flagData = await flagResp.json();
-    await writeSourceData(`${projPath}/flags`, flagKey, flagData);
+    await writeSourceData(`${projPath}/flags`, `${flagKey}-${await sha256HexUtf8(flagKey)}`, flagData);
   })
 );
