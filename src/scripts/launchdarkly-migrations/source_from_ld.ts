@@ -57,7 +57,7 @@ const totalEnvironments = projData.environments.totalCount || allEnvironments.le
 if (totalEnvironments > allEnvironments.length) {
   console.log(`Project has ${totalEnvironments} environments, fetching all...`);
   
-  const envPageSize: number = 20;
+  const envPageSize: number = 100;
   let envOffset: number = allEnvironments.length;
   let moreEnvironments: boolean = true;
   let envPath = `projects/${inputArgs.projKey}/environments?limit=${envPageSize}&offset=${envOffset}`;
