@@ -7,9 +7,9 @@ import {
   consoleLogger,
   ldAPIRequest,
   rateLimitRequest,
-  rateLimitRequestConcurrent,
   writeSourceData,
 } from "../../utils/utils.ts";
+import { Semaphore } from "../../utils/semaphore.ts";
 import { getSourceApiKey } from "../../utils/api_keys.ts";
 
 interface Arguments {
@@ -204,27 +204,29 @@ const EXTRACT_GET_CONCURRENCY = 10;
 console.log(`\nExtracting individual flag data (${flags.length} flags, concurrency ${EXTRACT_GET_CONCURRENCY})...`);
 ensureDirSync(`${projPath}/flags`);
 
-const flagRequests = flags.map((flagKey: string) => ({
-  req: ldAPIRequest(apiKey, domain, `flags/${inputArgs.projKey}/${flagKey}`),
-  routeCategory: "flags" as const,
-}));
-const flagResponses = await rateLimitRequestConcurrent(flagRequests, EXTRACT_GET_CONCURRENCY);
+const requestPermits = new Semaphore(EXTRACT_GET_CONCURRENCY);
+await Promise.all(
+  flags.entries().map(async ([index, flagKey]) => {
+    await using _permit = await requestPermits.acquire();
+    console.log(`Getting flag ${index + 1} of ${flags.length}: ${flagKey}`);
 
-for (let i = 0; i < flags.length; i++) {
-  const flagKey = flags[i];
-  const flagResp = flagResponses[i];
-  if (flagResp == null) {
-    console.log(`Failed getting flag '${flagKey}'`);
-    Deno.exit(1);
-  }
-  if (flagResp.status > 201) {
-    consoleLogger(
-      flagResp.status,
-      `Error getting flag '${flagKey}': ${flagResp.status}`
+    const flagResp = await rateLimitRequest(
+      ldAPIRequest(apiKey, domain, `flags/${inputArgs.projKey}/${flagKey}`),
+      "flags"
     );
-    consoleLogger(flagResp.status, await flagResp.text());
-    continue;
-  }
-  const flagData = await flagResp.json();
-  await writeSourceData(`${projPath}/flags`, flagKey, flagData);
-}
+    if (flagResp == null) {
+      console.log(`Failed getting flag '${flagKey}'`);
+      Deno.exit(1);
+    }
+    if (flagResp.status > 201) {
+      consoleLogger(
+        flagResp.status,
+        `Error getting flag '${flagKey}': ${flagResp.status}`
+      );
+      consoleLogger(flagResp.status, await flagResp.text());
+    }
+
+    const flagData = await flagResp.json();
+    await writeSourceData(`${projPath}/flags`, flagKey, flagData);
+  })
+);
