@@ -9,6 +9,7 @@ import {
   rateLimitRequest,
   writeSourceData,
 } from "../../utils/utils.ts";
+import { Semaphore } from "../../utils/semaphore.ts";
 import { getSourceApiKey } from "../../utils/api_keys.ts";
 
 interface Arguments {
@@ -56,7 +57,7 @@ const totalEnvironments = projData.environments.totalCount || allEnvironments.le
 if (totalEnvironments > allEnvironments.length) {
   console.log(`Project has ${totalEnvironments} environments, fetching all...`);
   
-  const envPageSize: number = 20;
+  const envPageSize: number = 100;
   let envOffset: number = allEnvironments.length;
   let moreEnvironments: boolean = true;
   let envPath = `projects/${inputArgs.projKey}/environments?limit=${envPageSize}&offset=${envOffset}`;
@@ -198,35 +199,34 @@ console.log(`Found ${flags.length} flags`);
 
 await writeSourceData(projPath, "flags", flags);
 
-// Get Individual Flag Data //
-console.log("\nExtracting individual flag data...");
+// Get Individual Flag Data (up to 10 concurrent GETs)
+const EXTRACT_GET_CONCURRENCY = 10;
+console.log(`\nExtracting individual flag data (${flags.length} flags, concurrency ${EXTRACT_GET_CONCURRENCY})...`);
 ensureDirSync(`${projPath}/flags`);
 
-for (const [index, flagKey] of flags.entries()) {
-  console.log(`Getting flag ${index + 1} of ${flags.length}: ${flagKey}`);
+const requestPermits = new Semaphore(EXTRACT_GET_CONCURRENCY);
+await Promise.all(
+  flags.entries().map(async ([index, flagKey]) => {
+    await using _permit = await requestPermits.acquire();
+    console.log(`Getting flag ${index + 1} of ${flags.length}: ${flagKey}`);
 
-  // Use rateLimitRequest which handles delays based on response headers
-  const flagResp = await rateLimitRequest(
-    ldAPIRequest(
-      apiKey,
-      domain,
-      `flags/${inputArgs.projKey}/${flagKey}`
-    ),
-    "flags"
-  );
-  if (flagResp.status > 201) {
-    consoleLogger(
-      flagResp.status,
-      `Error getting flag '${flagKey}': ${flagResp.status}`
+    const flagResp = await rateLimitRequest(
+      ldAPIRequest(apiKey, domain, `flags/${inputArgs.projKey}/${flagKey}`),
+      "flags"
     );
-    consoleLogger(flagResp.status, await flagResp.text());
-  }
-  if (flagResp == null) {
-    console.log("Failed getting flag '${flagKey}'");
-    Deno.exit(1);
-  }
+    if (flagResp == null) {
+      console.log(`Failed getting flag '${flagKey}'`);
+      Deno.exit(1);
+    }
+    if (flagResp.status > 201) {
+      consoleLogger(
+        flagResp.status,
+        `Error getting flag '${flagKey}': ${flagResp.status}`
+      );
+      consoleLogger(flagResp.status, await flagResp.text());
+    }
 
-  const flagData = await flagResp.json();
-
-  await writeSourceData(`${projPath}/flags`, flagKey, flagData);
-}
+    const flagData = await flagResp.json();
+    await writeSourceData(`${projPath}/flags`, flagKey, flagData);
+  })
+);
