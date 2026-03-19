@@ -1,2 +1,3 @@
 data/*
 config/api_keys.json
+config/server_side_sdk_keys.json
