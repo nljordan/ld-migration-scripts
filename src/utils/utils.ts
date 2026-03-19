@@ -17,6 +17,12 @@ export async function delay(ms: number) {
   await new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/** Full hex SHA-256 of UTF-8 string (64 chars). For collision-safe flag extract filenames. */
+export async function sha256HexUtf8(s: string): Promise<string> {
+  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(b), (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
 // ==================== Smart Rate Limiter ====================
 
 interface RateLimitState {
