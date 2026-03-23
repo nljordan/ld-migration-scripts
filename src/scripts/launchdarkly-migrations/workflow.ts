@@ -40,6 +40,7 @@ interface WorkflowConfig {
     dryRun?: boolean;
     incremental?: boolean;
     since?: string;
+    ruleValueReplacements?: { attribute?: string; match: string; replace: string }[];
   };
   thirdPartyImport?: {
     inputFile: string;
@@ -255,6 +256,10 @@ const buildMigrationArgs = (config: WorkflowConfig): string[] => {
 
   if (migration.environmentMapping) {
     args = addOptionalArg(args, "--env-map", formatEnvMapping(migration.environmentMapping));
+  }
+
+  if (migration.ruleValueReplacements?.length) {
+    args = addOptionalArg(args, "--rule-value-replacements", JSON.stringify(migration.ruleValueReplacements));
   }
 
   return args;
