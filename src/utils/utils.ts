@@ -262,6 +262,26 @@ export function ldAPIPatchRequest(
   return req;
 }
 
+export function ldAPIPatchRequestSemantic(
+  apiKey: string,
+  domain: string,
+  path: string,
+  body: { instructions: unknown[]; comment?: string },
+) {
+  return new Request(
+    `https://${domain}/api/v2/${path}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json; domain-model=launchdarkly.semanticpatch",
+        "Authorization": apiKey,
+        "LD-API-Version": apiVersion,
+      },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
 export function buildPatch(key: string, op: string, value: unknown) {
   return {
     path: "/" + key,
@@ -304,12 +324,32 @@ export function buildRules(
 export function buildRulesReplace(
   rules: Rule[],
   env?: string,
+  maxVariationIndex?: number,
 ): { path: string; op: string; value: unknown } {
   const path = env ? `${env}/rules` : "rules";
-  const cleaned = rules.map(({ _id, _generation, _deleted, _version, _ref, clauses, ...rest }) => ({
-    ...rest,
-    clauses: clauses.map(({ _id, ...clauseRest }) => clauseRest),
-  }));
+  const cleaned = rules.map(({ _id, _generation, _deleted, _version, _ref, clauses, ...rest }) => {
+    const rule: Record<string, unknown> = {
+      ...rest,
+      clauses: clauses.map(({ _id, ...clauseRest }) => clauseRest),
+    };
+    if (maxVariationIndex != null) {
+      if (typeof rule.variation === "number") {
+        rule.variation = Math.min(Math.max(0, rule.variation), maxVariationIndex);
+      }
+      if (rule.rollout && typeof rule.rollout === "object") {
+        const rollout = rule.rollout as Record<string, unknown>;
+        if (Array.isArray(rollout.variations)) {
+          rollout.variations = rollout.variations.map((rv: any) => ({
+            ...rv,
+            variation: typeof rv.variation === "number"
+              ? Math.min(Math.max(0, rv.variation), maxVariationIndex)
+              : rv.variation,
+          }));
+        }
+      }
+    }
+    return rule;
+  });
   return buildPatch(path, "replace", cleaned);
 }
 

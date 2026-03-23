@@ -7,6 +7,7 @@ import {
   consoleLogger,
   getJson,
   ldAPIPatchRequest,
+  ldAPIPatchRequestSemantic,
   ldAPIPostRequest,
   ldAPIRequest,
   rateLimitRequest,
@@ -40,6 +41,7 @@ interface Arguments {
   includeFlags?: string;
   excludeFlags?: string;
   concurrency?: number;
+  ruleValueReplacements?: string;
 }
 
 interface SyncManifestEnv {
@@ -66,6 +68,12 @@ interface SyncManifest {
   segments?: Record<string, Record<string, SyncManifestSegment>>; // segments[envKey][segmentKey]
 }
 
+interface RuleValueReplacement {
+  attribute?: string;
+  match: string;
+  replace: string;
+}
+
 interface MigrationConfig {
   source: {
     projectKey: string;
@@ -88,6 +96,7 @@ interface MigrationConfig {
     includeFlags?: string[];
     excludeFlags?: string[];
     concurrency?: number;
+    ruleValueReplacements?: RuleValueReplacement[];
   };
   /** Alias for options — YAML configs may use migration: instead of options: */
   migration?: MigrationConfig["options"];
@@ -164,6 +173,24 @@ async function dryRunAwarePatch(
   );
 }
 
+async function dryRunAwarePatchSemantic(
+  dryRun: boolean,
+  apiKey: string,
+  domain: string,
+  path: string,
+  body: { instructions: unknown[]; comment?: string },
+  rateLimit: string = 'default',
+  context?: string
+): Promise<Response> {
+  if (dryRun) {
+    return simulatePatchRequest(path, body.instructions, context);
+  }
+  return await rateLimitRequest(
+    ldAPIPatchRequestSemantic(apiKey, domain, path, body),
+    rateLimit
+  );
+}
+
 // ==================== Project Helpers ====================
 
 // Add function to check if project exists
@@ -203,6 +230,7 @@ const cliArgs: Arguments = (yargs(Deno.args)
   .alias("concurrency", "concurrency")
   .number("concurrency")
   .default("concurrency", 10)
+  .alias("rule-value-replacements", "ruleValueReplacements")
   .boolean("m")
   .boolean("s")
   .boolean("dry-run")
@@ -221,6 +249,7 @@ const cliArgs: Arguments = (yargs(Deno.args)
   .describe("include-flags", "Comma-separated list of flag keys to migrate (only these flags)")
   .describe("exclude-flags", "Comma-separated list of flag keys to exclude from migration")
   .describe("concurrency", "Max number of flags to migrate in parallel (default: 10)")
+  .describe("rule-value-replacements", "JSON array of {attribute?, match, replace} objects for rule clause value transformation")
   .parse() as unknown) as Arguments;
 
 // Load and merge config file if provided
@@ -255,6 +284,8 @@ if (cliArgs.config) {
       includeFlags: cliArgs.includeFlags ?? (opts?.includeFlags?.length ? opts.includeFlags.join(",") : undefined),
       excludeFlags: cliArgs.excludeFlags ?? (opts?.excludeFlags?.length ? opts.excludeFlags.join(",") : undefined),
       concurrency: cliArgs.concurrency ?? opts?.concurrency ?? 10,
+      ruleValueReplacements: cliArgs.ruleValueReplacements
+        || (opts?.ruleValueReplacements ? JSON.stringify(opts.ruleValueReplacements) : undefined),
       config: cliArgs.config
     };
     
@@ -262,6 +293,17 @@ if (cliArgs.config) {
   } catch (error) {
     console.log(Colors.red(`Error loading config file: ${error instanceof Error ? error.message : String(error)}`));
     Deno.exit(1);
+  }
+}
+
+// Parse rule value replacements from JSON string into typed list
+const ruleValueReplacements: RuleValueReplacement[] = inputArgs.ruleValueReplacements
+  ? JSON.parse(inputArgs.ruleValueReplacements)
+  : [];
+if (ruleValueReplacements.length > 0) {
+  console.log(Colors.cyan(`Rule value replacements configured: ${ruleValueReplacements.length} rule(s)`));
+  for (const r of ruleValueReplacements) {
+    console.log(Colors.gray(`  ${r.attribute ? `[${r.attribute}] ` : ""}${r.match} -> ${r.replace}`));
   }
 }
 
@@ -428,7 +470,7 @@ if (inputArgs.environments) {
     Deno.exit(1);
   }
   
-  console.log(`Migrating ${envkeys.length} of ${originalEnvCount} environments\n`);
+  console.log(`Will update flags and segments in ${envkeys.length} of ${originalEnvCount} environment(s)\n`);
 }
 
 // Apply environment mapping if specified
@@ -445,7 +487,7 @@ if (inputArgs.envMap) {
     Deno.exit(1);
   }
   
-  console.log(Colors.cyan(`Migrating ${envkeys.length} mapped environment(s)\n`));
+  console.log(Colors.cyan(`Will update flags and segments in ${envkeys.length} mapped environment(s)\n`));
 }
 
 // Destination project must already exist; we do not create projects.
@@ -486,7 +528,7 @@ if (inputArgs.envMap) {
   }
   envkeys = envkeys.filter(key => existingEnvs.includes(key));
   if (envkeys.length > 0) {
-    console.log(Colors.cyan(`Migrating ${envkeys.length} environment(s) that exist in both projects\n`));
+    console.log(Colors.cyan(`Will update flags and segments in ${envkeys.length} environment(s): ${envkeys.join(', ')}\n`));
   }
 }
 
@@ -744,7 +786,8 @@ if (inputArgs.migrateSegments) {
 
       if (segment.rules?.length > 0) {
           console.log(`Copying Segment: ${segmentKey} rules`);
-        sgmtPatches.push(buildRulesReplace(segment.rules));
+        const transformed = applyRuleValueReplacements(segment.rules, ruleValueReplacements);
+        sgmtPatches.push(buildRulesReplace(transformed));
       }
 
       const patchRules = await dryRunAwarePatch(
@@ -1242,6 +1285,67 @@ const wouldPatchChangeEnvironment = (
 };
 
 /**
+ * Phase 2e: Remap targets/contextTargets from source variationIds to destination variationIds.
+ * Source variationIds (UUIDs) are project-specific; destination has different UUIDs for the same logical variation.
+ * Also clamps numeric variation indices to [0, maxVarIdx] when present.
+ */
+function remapTargetsVariationIds(
+  items: any[],
+  sourceVariations: any[],
+  destVariations: any[],
+  maxVarIdx: number
+): any[] {
+  if (!items || !Array.isArray(items)) return items;
+  const sourceIdToIndex = new Map<string, number>();
+  (sourceVariations || []).forEach((v: any, i: number) => {
+    if (v?._id) sourceIdToIndex.set(v._id, i);
+  });
+  return items.map((item: any) => {
+    const copy = { ...item };
+    if (copy.variationId != null) {
+      const idx = sourceIdToIndex.get(copy.variationId);
+      if (idx !== undefined && destVariations?.[idx]?._id) {
+        copy.variationId = destVariations[idx]._id;
+      }
+      // If no mapping found, leave as-is (may fail on dest; avoid corrupting)
+    }
+    if (typeof copy.variation === "number") {
+      copy.variation = Math.min(Math.max(0, copy.variation), maxVarIdx);
+    }
+    return copy;
+  });
+}
+
+/**
+ * Applies configured value replacements to rule clause values.
+ * Each replacement optionally filters by clause attribute; when attribute is omitted,
+ * all clauses are eligible for that replacement.
+ */
+function applyRuleValueReplacements(
+  rules: any[],
+  replacements: RuleValueReplacement[]
+): any[] {
+  if (!replacements.length || !rules?.length) return rules;
+  return rules.map(rule => ({
+    ...rule,
+    clauses: (rule.clauses || []).map((clause: any) => {
+      if (!Array.isArray(clause.values)) return clause;
+      const applicable = replacements.filter(r => !r.attribute || r.attribute === clause.attribute);
+      if (!applicable.length) return clause;
+      return {
+        ...clause,
+        values: clause.values.map((v: unknown) => {
+          for (const r of applicable) {
+            if (String(v) === r.match) return r.replace;
+          }
+          return v;
+        })
+      };
+    })
+  }));
+}
+
+/**
  * Makes a patch call to update flag environment configuration
  * Handles approval workflows when direct patching requires approval (405)
  * Retries 404s after a delay (environment may not be ready yet)
@@ -1607,12 +1711,17 @@ async function processOneFlag(index: number, flagkey: string): Promise<FlagProce
     // (LaunchDarkly generates new UUIDs when the flag is created)
     let destinationVariations = flag.variations; // Fallback to source variations
     let destinationFlag: any = null;
+    let effectiveDestVarCount = destinationVariations?.length ?? 0;
     
     try {
+      // Phase 1: Only fetch workflow-defined environments
+      const envQuery = envkeys.length > 0
+        ? envkeys.map((e) => envMapping[e] ?? e).join(",")
+        : "*";
       const destFlagReq = ldAPIRequest(
         apiKey,
         domain,
-        `flags/${inputArgs.projKeyDest}/${createdFlagKey}?env=*`  // Request all environments
+        `flags/${inputArgs.projKeyDest}/${createdFlagKey}?env=${envQuery}`
       );
       const destFlagResp = await rateLimitRequest(destFlagReq, 'flags');
       
@@ -1620,6 +1729,7 @@ async function processOneFlag(index: number, flagkey: string): Promise<FlagProce
         destinationFlag = await destFlagResp.json();
         if (destinationFlag.variations && Array.isArray(destinationFlag.variations)) {
           destinationVariations = destinationFlag.variations;
+          effectiveDestVarCount = destinationVariations.length;
         }
       }
     } catch (error) {
@@ -1655,10 +1765,138 @@ async function processOneFlag(index: number, flagkey: string): Promise<FlagProce
       // Strip _id from both sides before comparing
       const stripIds = (v: any[]) => v.map(({ _id, ...rest }: any) => rest);
       const destVarsClean = destinationFlag.variations ? stripIds(destinationFlag.variations) : [];
-      if (newVariations?.length > 0 && changed(newVariations, destVarsClean)) {
+      const destCount = destinationFlag.variations?.length ?? 0;
+      const newCount = newVariations?.length ?? 0;
+      const variationsChanged = newVariations?.length > 0 && changed(newVariations, destVarsClean);
+      const existingMatch = destCount > 0 && newCount >= destCount &&
+        newVariations!.slice(0, destCount).every((v: unknown, i: number) => JSON.stringify(v) === JSON.stringify(destVarsClean[i]));
+
+      let prePatchOk = true;
+      let variationsHandledViaSemantic = false;
+      // Phase 2c: When adding variations only, use semantic addVariation instead of JSON Patch add
+      if (variationsChanged && newCount > destCount && existingMatch) {
+        const toAdd = newVariations!.slice(destCount);
+        const addInstructions = toAdd.map((v: { value: unknown; name?: string; description?: string }) => ({
+          kind: "addVariation" as const,
+          value: v.value,
+          ...(v.name != null && { name: v.name }),
+          ...(v.description != null && { description: v.description }),
+        }));
+        if (addInstructions.length > 0) {
+          console.log(Colors.gray(`\tAdding ${addInstructions.length} variation(s) via semantic patch...`));
+          const addResp = await dryRunAwarePatchSemantic(
+            inputArgs.dryRun || false, apiKey, domain,
+            `flags/${inputArgs.projKeyDest}/${createdFlagKey}`,
+            { instructions: addInstructions }, "flags", "addVariation"
+          );
+          if (addResp.status >= 200 && addResp.status < 300) {
+            console.log(Colors.green(`\t✓ Variations added`));
+            effectiveDestVarCount = newCount;
+            variationsHandledViaSemantic = true;
+            if (flag.defaults) {
+              const dr = await dryRunAwarePatch(inputArgs.dryRun || false, apiKey, domain,
+                `flags/${inputArgs.projKeyDest}/${createdFlagKey}`, [buildPatch("defaults", "replace", flag.defaults)], false, "flags", "defaults");
+              if (dr.status >= 200 && dr.status < 300) console.log(Colors.green(`\t✓ Defaults updated`));
+            }
+            // Refresh destinationFlag for subsequent env loop
+            if (!inputArgs.dryRun) {
+              try {
+                const refetch = await rateLimitRequest(ldAPIRequest(apiKey, domain,
+                  `flags/${inputArgs.projKeyDest}/${createdFlagKey}?env=${envkeys.length > 0 ? envkeys.map((e) => envMapping[e] ?? e).join(",") : "*"}`), 'flags');
+                if (refetch.status === 200) {
+                  destinationFlag = await refetch.json();
+                  if (destinationFlag.variations) destinationVariations = destinationFlag.variations;
+                }
+              } catch (_e) { /* non-fatal */ }
+            }
+          } else {
+            console.log(Colors.yellow(`\t⚠ Add variation failed (${addResp.status}): ${await addResp.text()}`));
+            flagsWithErrors.add(createdFlagKey);
+            prePatchOk = false;
+          }
+        }
+      } else if (variationsChanged && !variationsHandledViaSemantic) {
+        // Preserve variation _ids to avoid "cannot delete default on variation" errors.
+        // LD ties defaults/fallthrough to variation _ids, so replacing the array (without _ids) = deletion.
+        // Strategy: update kept variations in-place, then remove extras via semantic removeVariation.
+
+        // Phase A: Update kept variations in-place (min of old/new count)
+        const keepCount = Math.min(newCount, destCount);
+        console.log(Colors.gray(`\tUpdating ${keepCount} variation(s) in-place (preserve IDs)...`));
+        for (let i = 0; i < keepCount; i++) {
+          const src = newVariations![i] as any;
+          const destVar = destinationVariations?.[i];
+          const patchVal = { ...(destVar?._id && { _id: destVar._id }), ...src };
+          flagLevelPatches.push(buildPatch(`variations/${i}`, "replace", patchVal));
+        }
+        if (flag.defaults) flagLevelPatches.push(buildPatch("defaults", "replace", flag.defaults));
+
+        // Phase B: If shrink, pre-patch envs then remove extra variations via semantic patch
+        if (newCount < destCount) {
+          // Fetch all envs so we can pre-patch everything
+          let flagForPrepatch = destinationFlag;
+          if (!inputArgs.dryRun) {
+            try {
+              const fullReq = await rateLimitRequest(ldAPIRequest(apiKey, domain,
+                `flags/${inputArgs.projKeyDest}/${createdFlagKey}?env=*`), 'flags');
+              if (fullReq.status === 200) flagForPrepatch = await fullReq.json();
+            } catch (_e) { /* non-fatal */ }
+          }
+          // Pre-patch: point all env configs to safe variation 0 before removing extras
+          const safeIdx = 0;
+          const safePatches: any[] = [buildPatch("defaults", "replace", { onVariation: safeIdx, offVariation: safeIdx })];
+          for (const [key, env] of Object.entries(flagForPrepatch.environments || {})) {
+            const e = env as any;
+            if (!e) continue;
+            if (e.offVariation !== safeIdx) safePatches.push(buildPatch(`environments/${key}/offVariation`, "replace", safeIdx));
+            safePatches.push(buildPatch(`environments/${key}/fallthrough`, "replace", { variation: safeIdx }));
+            if (Array.isArray(e.targets) && e.targets.length > 0)
+              safePatches.push(buildPatch(`environments/${key}/targets`, "replace", []));
+            if (Array.isArray(e.contextTargets) && e.contextTargets.length > 0)
+              safePatches.push(buildPatch(`environments/${key}/contextTargets`, "replace", []));
+            if (Array.isArray(e.rules) && e.rules.length > 0)
+              safePatches.push(buildPatch(`environments/${key}/rules`, "replace", []));
+          }
+          console.log(Colors.gray(`\tPre-patching defaults + env (${safePatches.length} op(s)) before variation shrink...`));
+          const preResp = await dryRunAwarePatch(inputArgs.dryRun || false, apiKey, domain,
+            `flags/${inputArgs.projKeyDest}/${createdFlagKey}`, safePatches, false, 'flags', 'pre-patch');
+          if (preResp.status >= 200 && preResp.status < 300) {
+            console.log(Colors.green(`\t✓ Pre-patch applied`));
+            // Remove extra variations from the end using semantic removeVariation
+            const removeInstructions: { kind: string; variationId: string }[] = [];
+            for (let i = destCount - 1; i >= newCount; i--) {
+              const varId = destinationVariations?.[i]?._id;
+              if (varId) removeInstructions.push({ kind: "removeVariation", variationId: varId });
+            }
+            if (removeInstructions.length > 0) {
+              console.log(Colors.gray(`\tRemoving ${removeInstructions.length} extra variation(s) via semantic patch...`));
+              const rmResp = await dryRunAwarePatchSemantic(
+                inputArgs.dryRun || false, apiKey, domain,
+                `flags/${inputArgs.projKeyDest}/${createdFlagKey}`,
+                { instructions: removeInstructions }, "flags", "removeVariation"
+              );
+              if (rmResp.status >= 200 && rmResp.status < 300) {
+                console.log(Colors.green(`\t✓ Extra variations removed`));
+              } else {
+                console.log(Colors.yellow(`\t⚠ Remove variation failed (${rmResp.status}): ${await rmResp.text()}`));
+                flagsWithErrors.add(createdFlagKey);
+                prePatchOk = false;
+              }
+            }
+          } else {
+            console.log(Colors.yellow(`\t⚠ Pre-patch failed (${preResp.status}): ${await preResp.text()}`));
+            flagsWithErrors.add(createdFlagKey);
+            prePatchOk = false;
+          }
+        }
+
+        variationsHandledViaSemantic = true;
+      }
+
+      if (variationsChanged && prePatchOk && !variationsHandledViaSemantic) {
         flagLevelPatches.push(buildPatch("variations", "replace", newVariations));
         if (flag.defaults) flagLevelPatches.push(buildPatch("defaults", "replace", flag.defaults));
-      } else if (flag.defaults && changed(flag.defaults, destinationFlag.defaults)) {
+      } else if (!variationsHandledViaSemantic && flag.defaults && changed(flag.defaults, destinationFlag.defaults)) {
         flagLevelPatches.push(buildPatch("defaults", "replace", flag.defaults));
       }
 
@@ -1669,10 +1907,39 @@ async function processOneFlag(index: number, flagkey: string): Promise<FlagProce
           `flags/${inputArgs.projKeyDest}/${createdFlagKey}`, flagLevelPatches, false, 'flags', 'flag-level properties');
         if (flagLevelResp.status >= 200 && flagLevelResp.status < 300) {
           console.log(Colors.green(`\t✓ Flag-level properties updated`));
+          if (variationsChanged) effectiveDestVarCount = newCount;
         } else {
           const errText = await flagLevelResp.text();
           console.log(Colors.yellow(`\t⚠ Flag-level update failed (${flagLevelResp.status}): ${errText}`));
-          flagsWithErrors.add(createdFlagKey);
+          // Semantic patch fallback for Unsupported json-patch
+          if (errText.includes("Unsupported json-patch")) {
+            const semanticInstructions: { kind: string; [k: string]: unknown }[] = [];
+            for (const p of flagLevelPatches) {
+              if (p.op === "replace" && p.path === "/name" && p.value != null) {
+                semanticInstructions.push({ kind: "updateName", name: p.value });
+              } else if (p.op === "replace" && p.path === "/description" && p.value !== undefined) {
+                semanticInstructions.push({ kind: "updateDescription", description: p.value });
+              }
+            }
+            if (semanticInstructions.length > 0) {
+              console.log(Colors.gray(`\t  Retrying ${semanticInstructions.length} field(s) via semantic patch...`));
+              const semResp = await dryRunAwarePatchSemantic(
+                inputArgs.dryRun || false, apiKey, domain,
+                `flags/${inputArgs.projKeyDest}/${createdFlagKey}`,
+                { instructions: semanticInstructions }, "flags", "semantic fallback"
+              );
+              if (semResp.status >= 200 && semResp.status < 300) {
+                console.log(Colors.green(`\t✓ Semantic patch succeeded for name/description`));
+                flagsWithErrors.delete(createdFlagKey);
+              } else {
+                flagsWithErrors.add(createdFlagKey);
+              }
+            } else {
+              flagsWithErrors.add(createdFlagKey);
+            }
+          } else {
+            flagsWithErrors.add(createdFlagKey);
+          }
         }
       }
     }
@@ -1721,10 +1988,23 @@ async function processOneFlag(index: number, flagkey: string): Promise<FlagProce
         return Object.assign(cur, { [key]: flagEnvData[key] });
       }, {});
 
+    const maxVarIdx = effectiveDestVarCount > 0 ? effectiveDestVarCount - 1 : 0;
+    const sourceVariations = flag.variations ?? [];
     Object.keys(parsedData)
       .map((key) => {
         if (key == "rules") {
-            patchReq.push(buildRulesReplace(parsedData[key] as unknown as Rule[], "environments/" + destEnvKey));
+            const transformed = applyRuleValueReplacements(parsedData[key] as unknown as any[], ruleValueReplacements);
+            patchReq.push(buildRulesReplace(transformed as unknown as Rule[], "environments/" + destEnvKey, maxVarIdx));
+        } else if (key === "targets" || key === "contextTargets") {
+          // Phase 2e: Remap source variationIds to destination variationIds for cross-project migration
+          const raw = parsedData[key];
+          const remapped = remapTargetsVariationIds(
+            Array.isArray(raw) ? raw : [],
+            sourceVariations,
+            destinationVariations ?? [],
+            maxVarIdx
+          );
+          patchReq.push(buildPatch(`environments/${destEnvKey}/${key}`, "replace", remapped));
         } else {
           patchReq.push(
             buildPatch(
@@ -1745,11 +2025,20 @@ async function processOneFlag(index: number, flagkey: string): Promise<FlagProce
   }
 
   // Track flag version for sync manifest (flag-level lastModified comes from creationDate or _version)
-  updatedManifestFlags[flag.key] = {
-    version: flag._version ?? 0,
-    lastModified: flag.creationDate,
-    environments: flagManifestEnvs,
-  };
+  // If this flag had errors: carry forward previous manifest entry so incremental retries next run.
+  // Don't add failed new flags to manifest so they're retried.
+  if (flagsWithErrors.has(flag.key)) {
+    if (previousManifest?.flags[flag.key]) {
+      updatedManifestFlags[flag.key] = previousManifest.flags[flag.key];
+    }
+    // else: omit from manifest — next run will process (no prevEntry → no skip)
+  } else {
+    updatedManifestFlags[flag.key] = {
+      version: flag._version ?? 0,
+      lastModified: flag.creationDate,
+      environments: flagManifestEnvs,
+    };
+  }
 
   return { incrementalSkipCountDelta, incrementalEnvSkipCountDelta };
 }
