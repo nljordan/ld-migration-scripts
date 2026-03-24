@@ -319,9 +319,16 @@ if (inputArgs.incremental && inputArgs.since) {
   Deno.exit(1);
 }
 
+const dryRunOutputDir = inputArgs.dryRun && ruleValueReplacements.length
+  ? `./data/launchdarkly-migrations/dry-run-output/${new Date().toISOString().replace(/[:.]/g, "-")}`
+  : null;
+
 if (inputArgs.dryRun) {
   console.log(Colors.yellow("\n⚠️  DRY RUN MODE - No changes will be made"));
   console.log(Colors.yellow("All API write operations will be simulated\n"));
+  if (dryRunOutputDir) {
+    console.log(Colors.yellow(`Transformed flag configs will be written to: ${dryRunOutputDir}\n`));
+  }
 }
 
 // Get destination API key
@@ -734,7 +741,7 @@ if (inputArgs.migrateSegments) {
 
       if (segment.rules?.length > 0) {
           console.log(`Copying Segment: ${segmentKey} rules`);
-        const transformed = applyRuleValueReplacements(segment.rules, ruleValueReplacements);
+        const transformed = applyRuleValueReplacements(segment.rules, ruleValueReplacements, `segment:${segmentKey}`);
         sgmtPatches.push(buildRulesReplace(transformed));
       }
 
@@ -1271,22 +1278,28 @@ function remapTargetsVariationIds(
  */
 function applyRuleValueReplacements(
   rules: any[],
-  replacements: RuleValueReplacement[]
+  replacements: RuleValueReplacement[],
+  label?: string
 ): any[] {
   if (!replacements.length || !rules?.length) return rules;
   const removeEntries = replacements.filter(r => r.action === "remove");
   const replaceEntries = replacements.filter(r => r.action !== "remove");
+  const prefix = label ? `[${label}] ` : "";
 
   return rules
-    .map(rule => {
+    .map((rule, ruleIdx) => {
       let clauses = (rule.clauses || []) as any[];
+      const origCount = clauses.length;
 
       if (removeEntries.length) {
         clauses = clauses.filter((clause: any) => {
           for (const r of removeEntries) {
             const attrMatch = !r.attribute || r.attribute === clause.attribute;
             const valMatch = !r.match || (Array.isArray(clause.values) && clause.values.some((v: unknown) => String(v) === r.match));
-            if (attrMatch && valMatch) return false;
+            if (attrMatch && valMatch) {
+              console.log(Colors.yellow(`\t  ${prefix}rule[${ruleIdx}]: removed clause (attr=${clause.attribute}, values=${JSON.stringify(clause.values)})`));
+              return false;
+            }
           }
           return true;
         });
@@ -1297,18 +1310,22 @@ function applyRuleValueReplacements(
           if (!Array.isArray(clause.values)) return clause;
           const applicable = replaceEntries.filter(r => !r.attribute || r.attribute === clause.attribute);
           if (!applicable.length) return clause;
-          return {
-            ...clause,
-            values: clause.values.map((v: unknown) => {
-              for (const r of applicable) {
-                if (r.match && String(v) === r.match) return r.replace;
+          const newValues = clause.values.map((v: unknown) => {
+            for (const r of applicable) {
+              if (r.match && String(v) === r.match) {
+                console.log(Colors.yellow(`\t  ${prefix}rule[${ruleIdx}]: replaced "${r.match}" → "${r.replace}" in clause (attr=${clause.attribute})`));
+                return r.replace;
               }
-              return v;
-            })
-          };
+            }
+            return v;
+          });
+          return { ...clause, values: newValues };
         });
       }
 
+      if (clauses.length === 0 && origCount > 0) {
+        console.log(Colors.yellow(`\t  ${prefix}rule[${ruleIdx}]: dropped (all ${origCount} clauses removed)`));
+      }
       return { ...rule, clauses };
     })
     .filter(rule => rule.clauses.length > 0);
@@ -1414,7 +1431,8 @@ for (const [index, flagkey] of flagList.entries()) {
 
   // Incremental sync: check if flag-level AND all environment versions match
   // Flag-level _version alone isn't reliable — LD doesn't always bump it for env-only changes
-  if (inputArgs.incremental && previousManifest && flag._version !== undefined) {
+  // (bypass when dry-run output is needed so transformation previews are generated for all flags)
+  if (inputArgs.incremental && previousManifest && flag._version !== undefined && !dryRunOutputDir) {
     const prevEntry = previousManifest.flags[flag.key];
     if (prevEntry && prevEntry.version === flag._version) {
       // Flag-level version matches — check if all environment versions also match
@@ -1920,7 +1938,8 @@ for (const [index, flagkey] of flagList.entries()) {
     const envLastModified = flagEnvData.lastModified as string | undefined;
 
     // Incremental sync: skip unchanged environments by version comparison
-    if (inputArgs.incremental && previousManifest) {
+    // (but still process when dry-run output is needed so transformation previews are generated)
+    if (inputArgs.incremental && previousManifest && !dryRunOutputDir) {
       const prevFlag = previousManifest.flags[flag.key];
       const prevEnv = prevFlag?.environments?.[env];
       if (prevEnv && envVersion !== undefined && prevEnv.version === envVersion) {
@@ -1951,11 +1970,12 @@ for (const [index, flagkey] of flagList.entries()) {
 
     const maxVarIdx = effectiveDestVarCount > 0 ? effectiveDestVarCount - 1 : 0;
     const sourceVariations = flag.variations ?? [];
+    let transformedRules: any[] | null = null;
     Object.keys(parsedData)
       .map((key) => {
         if (key == "rules") {
-            const transformed = applyRuleValueReplacements(parsedData[key] as unknown as any[], ruleValueReplacements);
-            patchReq.push(buildRulesReplace(transformed as unknown as Rule[], "environments/" + destEnvKey, maxVarIdx));
+            transformedRules = applyRuleValueReplacements(parsedData[key] as unknown as any[], ruleValueReplacements, `${flagKey}/${destEnvKey}`);
+            patchReq.push(buildRulesReplace(transformedRules as unknown as Rule[], "environments/" + destEnvKey, maxVarIdx));
         } else if (key === "targets" || key === "contextTargets") {
           // Phase 2e: Remap source variationIds to destination variationIds for cross-project migration
           const raw = parsedData[key];
@@ -1976,6 +1996,19 @@ for (const [index, flagkey] of flagList.entries()) {
           );
         }
       });
+
+      if (dryRunOutputDir) {
+        const outDir = `${dryRunOutputDir}/${inputArgs.projKeyDest}`;
+        await Deno.mkdir(outDir, { recursive: true });
+        const outputData = transformedRules !== null
+          ? { ...parsedData, rules: transformedRules }
+          : parsedData;
+        await Deno.writeTextFile(
+          `${outDir}/${flagKey}_${destEnvKey}.json`,
+          JSON.stringify(outputData, null, 2)
+        );
+      }
+
       await makePatchCall(createdFlagKey, patchReq, destEnvKey, flagMaintainerId, currentMemberId, destinationVariations, destinationFlag);
 
     // Track env version in manifest
@@ -2182,3 +2215,7 @@ printMigrationSummary(
   flagsWithErrors,
   conflictTracker.getReport()
 );
+
+if (dryRunOutputDir) {
+  console.log(Colors.yellow(`\nDry-run transformed configs written to: ${dryRunOutputDir}`));
+}
