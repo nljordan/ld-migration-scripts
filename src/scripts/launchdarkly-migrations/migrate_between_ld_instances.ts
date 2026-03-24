@@ -67,8 +67,9 @@ interface SyncManifest {
 
 interface RuleValueReplacement {
   attribute?: string;
-  match: string;
-  replace: string;
+  match?: string;
+  replace?: string;
+  action?: "replace" | "remove";
 }
 
 interface MigrationConfig {
@@ -283,7 +284,7 @@ const ruleValueReplacements: RuleValueReplacement[] = inputArgs.ruleValueReplace
 if (ruleValueReplacements.length > 0) {
   console.log(Colors.cyan(`Rule value replacements configured: ${ruleValueReplacements.length} rule(s)`));
   for (const r of ruleValueReplacements) {
-    console.log(Colors.gray(`  ${r.attribute ? `[${r.attribute}] ` : ""}${r.match} -> ${r.replace}`));
+    console.log(Colors.gray(`  ${r.attribute ? `[${r.attribute}] ` : ""}${r.action === "remove" ? "REMOVE" : `${r.match} -> ${r.replace}`}`));
   }
 }
 
@@ -1273,23 +1274,44 @@ function applyRuleValueReplacements(
   replacements: RuleValueReplacement[]
 ): any[] {
   if (!replacements.length || !rules?.length) return rules;
-  return rules.map(rule => ({
-    ...rule,
-    clauses: (rule.clauses || []).map((clause: any) => {
-      if (!Array.isArray(clause.values)) return clause;
-      const applicable = replacements.filter(r => !r.attribute || r.attribute === clause.attribute);
-      if (!applicable.length) return clause;
-      return {
-        ...clause,
-        values: clause.values.map((v: unknown) => {
-          for (const r of applicable) {
-            if (String(v) === r.match) return r.replace;
+  const removeEntries = replacements.filter(r => r.action === "remove");
+  const replaceEntries = replacements.filter(r => r.action !== "remove");
+
+  return rules
+    .map(rule => {
+      let clauses = (rule.clauses || []) as any[];
+
+      if (removeEntries.length) {
+        clauses = clauses.filter((clause: any) => {
+          for (const r of removeEntries) {
+            const attrMatch = !r.attribute || r.attribute === clause.attribute;
+            const valMatch = !r.match || (Array.isArray(clause.values) && clause.values.some((v: unknown) => String(v) === r.match));
+            if (attrMatch && valMatch) return false;
           }
-          return v;
-        })
-      };
+          return true;
+        });
+      }
+
+      if (replaceEntries.length) {
+        clauses = clauses.map((clause: any) => {
+          if (!Array.isArray(clause.values)) return clause;
+          const applicable = replaceEntries.filter(r => !r.attribute || r.attribute === clause.attribute);
+          if (!applicable.length) return clause;
+          return {
+            ...clause,
+            values: clause.values.map((v: unknown) => {
+              for (const r of applicable) {
+                if (r.match && String(v) === r.match) return r.replace;
+              }
+              return v;
+            })
+          };
+        });
+      }
+
+      return { ...rule, clauses };
     })
-  }));
+    .filter(rule => rule.clauses.length > 0);
 }
 
 /**

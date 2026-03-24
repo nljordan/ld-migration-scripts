@@ -40,7 +40,7 @@ interface WorkflowConfig {
     dryRun?: boolean;
     incremental?: boolean;
     since?: string;
-    ruleValueReplacements?: { attribute?: string; match: string; replace: string }[];
+    ruleValueReplacements?: { attribute?: string; match?: string; replace?: string; action?: "replace" | "remove" }[];
   };
   thirdPartyImport?: {
     inputFile: string;
