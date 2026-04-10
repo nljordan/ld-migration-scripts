@@ -20,6 +20,7 @@ interface WorkflowConfig {
   };
   source: {
     projectKey?: string;
+    projectKeys?: string[];
     allProjects?: boolean;
     domain?: string;
   };
@@ -458,6 +459,8 @@ const printWorkflowHeader = (config: WorkflowConfig, steps: string[]): void => {
   console.log(Colors.cyan(`Configuration loaded: ${inputArgs.config}`));
   if (config.source.allProjects && !config.source.projectKey) {
     console.log(Colors.cyan(`Source: All projects from ${config.source.domain || "app.launchdarkly.com"}`));
+  } else if (config.source.projectKeys && config.source.projectKeys.length > 0) {
+    console.log(Colors.cyan(`Source: ${config.source.projectKeys.length} specific project(s) from ${config.source.domain || "app.launchdarkly.com"}`));
   } else {
     console.log(Colors.cyan(`Source Project: ${config.source.projectKey}`));
   }
@@ -533,8 +536,10 @@ const main = async (): Promise<void> => {
     Deno.env.set("DENO_CERT", config.tls.certFile);
   }
 
-  if (!config.source.allProjects && !config.source.projectKey) {
-    console.log(Colors.red("Error: source.projectKey is required (or set source.allProjects: true)"));
+  const hasProjectKeys = config.source.projectKeys && config.source.projectKeys.length > 0;
+
+  if (!config.source.allProjects && !config.source.projectKey && !hasProjectKeys) {
+    console.log(Colors.red("Error: source.projectKey (or source.projectKeys list, or source.allProjects: true) is required"));
     Deno.exit(1);
   }
 
@@ -543,6 +548,21 @@ const main = async (): Promise<void> => {
     console.log(Colors.blue(`\nDiscovering all projects from ${domain}...`));
     const projectKeys = await discoverProjects(domain);
     console.log(Colors.cyan(`Found ${projectKeys.length} project(s): ${projectKeys.join(", ")}\n`));
+
+    for (const [i, key] of projectKeys.entries()) {
+      console.log(Colors.blue(`\n[${i + 1}/${projectKeys.length}] Processing project: ${key}`));
+      const perProjectConfig: WorkflowConfig = {
+        ...config,
+        source: { ...config.source, projectKey: key },
+        destination: { ...config.destination, projectKey: key },
+      };
+      printWorkflowHeader(perProjectConfig, steps);
+      await executeWorkflowSteps(steps, perProjectConfig);
+    }
+    printWorkflowCompletion();
+  } else if (hasProjectKeys) {
+    const projectKeys = config.source.projectKeys!;
+    console.log(Colors.cyan(`Migrating ${projectKeys.length} specific project(s).\n`));
 
     for (const [i, key] of projectKeys.entries()) {
       console.log(Colors.blue(`\n[${i + 1}/${projectKeys.length}] Processing project: ${key}`));
