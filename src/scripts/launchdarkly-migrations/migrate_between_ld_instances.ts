@@ -74,6 +74,21 @@ interface RuleValueReplacement {
   action?: "replace" | "remove";
 }
 
+interface MigrationConfigOptions {
+  assignMaintainerIds?: boolean;
+  migrateSegments?: boolean;
+  conflictPrefix?: string;
+  targetView?: string;
+  environments?: string[];
+  environmentMapping?: Record<string, string>;
+  dryRun?: boolean;
+  incremental?: boolean;
+  since?: string;
+  ruleValueReplacements?: RuleValueReplacement[];
+  createProject?: boolean;
+  createEnvironments?: boolean;
+}
+
 interface MigrationConfig {
   source: {
     projectKey: string;
@@ -83,20 +98,8 @@ interface MigrationConfig {
     projectKey: string;
     domain?: string;
   };
-  options?: {
-    assignMaintainerIds?: boolean;
-    migrateSegments?: boolean;
-    conflictPrefix?: string;
-    targetView?: string;
-    environments?: string[];
-    environmentMapping?: Record<string, string>;
-    dryRun?: boolean;
-    incremental?: boolean;
-    since?: string;
-    ruleValueReplacements?: RuleValueReplacement[];
-    createProject?: boolean;
-    createEnvironments?: boolean;
-  };
+  options?: MigrationConfigOptions;
+  migration?: MigrationConfigOptions;
 }
 
 // ==================== Dry Run Helpers ====================
@@ -302,30 +305,33 @@ if (cliArgs.config) {
     const configContent = await Deno.readTextFile(cliArgs.config);
     const config = parseYaml(configContent) as MigrationConfig;
     
+    // Support both "options:" and "migration:" keys in YAML (workflow uses "migration:")
+    const opts = config.migration ?? config.options;
+
     // Merge config file with CLI args (CLI args take precedence)
     inputArgs = {
       projKeySource: cliArgs.projKeySource || config.source.projectKey,
       projKeyDest: cliArgs.projKeyDest || config.destination.projectKey,
       assignMaintainerIds: cliArgs.assignMaintainerIds !== undefined && cliArgs.assignMaintainerIds !== false 
         ? cliArgs.assignMaintainerIds 
-        : config.options?.assignMaintainerIds ?? false,
+        : opts?.assignMaintainerIds ?? false,
       migrateSegments: cliArgs.migrateSegments !== undefined && cliArgs.migrateSegments !== true
         ? cliArgs.migrateSegments
-        : config.options?.migrateSegments ?? true,
-      conflictPrefix: cliArgs.conflictPrefix || config.options?.conflictPrefix,
-      targetView: cliArgs.targetView || config.options?.targetView,
-      environments: cliArgs.environments || config.options?.environments?.join(','),
-      envMap: cliArgs.envMap || (config.options?.environmentMapping 
-        ? Object.entries(config.options.environmentMapping).map(([k, v]) => `${k}:${v}`).join(',')
+        : opts?.migrateSegments ?? true,
+      conflictPrefix: cliArgs.conflictPrefix || opts?.conflictPrefix,
+      targetView: cliArgs.targetView || opts?.targetView,
+      environments: cliArgs.environments || opts?.environments?.join(','),
+      envMap: cliArgs.envMap || (opts?.environmentMapping 
+        ? Object.entries(opts.environmentMapping).map(([k, v]) => `${k}:${v}`).join(',')
         : undefined),
       domain: cliArgs.domain || config.destination?.domain,
-      dryRun: cliArgs.dryRun ?? config.options?.dryRun ?? false,
-      incremental: cliArgs.incremental ?? config.options?.incremental ?? false,
-      since: cliArgs.since || config.options?.since,
+      dryRun: cliArgs.dryRun ?? opts?.dryRun ?? false,
+      incremental: cliArgs.incremental ?? opts?.incremental ?? false,
+      since: cliArgs.since || opts?.since,
       ruleValueReplacements: cliArgs.ruleValueReplacements
-        || (config.options?.ruleValueReplacements ? JSON.stringify(config.options.ruleValueReplacements) : undefined),
-      createProject: cliArgs.createProject ?? config.options?.createProject ?? false,
-      createEnvironments: cliArgs.createEnvironments ?? config.options?.createEnvironments ?? false,
+        || (opts?.ruleValueReplacements ? JSON.stringify(opts.ruleValueReplacements) : undefined),
+      createProject: cliArgs.createProject ?? opts?.createProject ?? false,
+      createEnvironments: cliArgs.createEnvironments ?? opts?.createEnvironments ?? false,
       config: cliArgs.config
     };
     
@@ -535,7 +541,9 @@ if (inputArgs.envMap) {
 }
 
 // Check destination project exists; optionally create it
+console.log(Colors.gray(`  createProject=${inputArgs.createProject}, createEnvironments=${inputArgs.createEnvironments}`));
 const targetProjectExists = await checkProjectExists(apiKey, domain, inputArgs.projKeyDest);
+console.log(Colors.gray(`  Destination project "${inputArgs.projKeyDest}" exists: ${targetProjectExists}`));
 
 if (!targetProjectExists) {
   if (inputArgs.createProject) {
