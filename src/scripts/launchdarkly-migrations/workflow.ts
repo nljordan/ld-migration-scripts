@@ -59,6 +59,11 @@ interface WorkflowConfig {
     deleteViews?: boolean;
     viewKeys?: string[];
   };
+  tls?: {
+    caStore?: string;
+    certFile?: string;
+    ignoreCertErrors?: boolean;
+  };
 }
 
 interface Arguments {
@@ -143,8 +148,9 @@ const printStepCompletion = (message: string): void => {
 /**
  * Builds base Deno run command args
  */
-const buildBaseRunArgs = (scriptPath: string, permissions: string[]): string[] => [
+const buildBaseRunArgs = (scriptPath: string, permissions: string[], config: WorkflowConfig): string[] => [
   "run",
+  ...(config.tls?.ignoreCertErrors ? ["--unsafely-ignore-certificate-errors"] : []),
   ...permissions,
   scriptPath
 ];
@@ -169,7 +175,8 @@ const addBooleanFlag = (args: string[], flag: string, condition?: boolean): stri
 const buildExtractSourceArgs = (config: WorkflowConfig): string[] => {
   const baseArgs = buildBaseRunArgs(
     "src/scripts/launchdarkly-migrations/source_from_ld.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config
   );
 
   let args = [...baseArgs, "-p", config.source.projectKey!];
@@ -205,7 +212,8 @@ const runExtractSource = async (config: WorkflowConfig): Promise<void> => {
 const buildMapMembersArgs = (config: WorkflowConfig): string[] => {
   const baseArgs = buildBaseRunArgs(
     "src/scripts/launchdarkly-migrations/map_members_between_ld_instances.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config
   );
 
   const withOutput = addOptionalArg(baseArgs, "-o", config.memberMapping?.outputFile);
@@ -278,7 +286,8 @@ const buildMigrationArgs = (config: WorkflowConfig): string[] => {
 const buildMigrateArgs = (config: WorkflowConfig): string[] => {
   const baseArgs = buildBaseRunArgs(
     "src/scripts/launchdarkly-migrations/migrate_between_ld_instances.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config
   );
 
   const withProjects = [
@@ -322,7 +331,8 @@ const buildThirdPartyImportArgs = (config: WorkflowConfig): string[] => {
   
   const baseArgs = buildBaseRunArgs(
     "src/scripts/third-party-migrations/import_flags_from_external.ts",
-    ["--allow-net", "--allow-read", "--allow-write", "--allow-env"]
+    ["--allow-net", "--allow-read", "--allow-write", "--allow-env"],
+    config
   );
 
   const withRequiredArgs = [
@@ -368,7 +378,8 @@ const buildRevertArgs = (config: WorkflowConfig): string[] => {
   
   const baseArgs = buildBaseRunArgs(
     "src/scripts/launchdarkly-migrations/revert_migration.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config
   );
 
   // Use the config file itself as the -f parameter (revert reads from it)
@@ -455,6 +466,12 @@ const printWorkflowHeader = (config: WorkflowConfig, steps: string[]): void => {
     console.log(Colors.cyan(`Destination Project: ${config.destination.projectKey}`));
   }
   
+  if (config.tls) {
+    if (config.tls.caStore) console.log(Colors.cyan(`TLS CA Store: ${config.tls.caStore}`));
+    if (config.tls.certFile) console.log(Colors.cyan(`TLS Cert File: ${config.tls.certFile}`));
+    if (config.tls.ignoreCertErrors) console.log(Colors.yellow(`TLS: Certificate errors will be ignored`));
+  }
+  
   console.log(Colors.cyan(`Steps to execute: ${steps.join(" → ")}\n`));
 };
 
@@ -508,6 +525,13 @@ async function discoverProjects(domain: string): Promise<string[]> {
 const main = async (): Promise<void> => {
   const config = await loadConfig(inputArgs.config);
   const steps = getWorkflowSteps(config);
+
+  if (config.tls?.caStore) {
+    Deno.env.set("DENO_TLS_CA_STORE", config.tls.caStore);
+  }
+  if (config.tls?.certFile) {
+    Deno.env.set("DENO_CERT", config.tls.certFile);
+  }
 
   if (!config.source.allProjects && !config.source.projectKey) {
     console.log(Colors.red("Error: source.projectKey is required (or set source.allProjects: true)"));

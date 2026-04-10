@@ -9,6 +9,12 @@
 #     - map-members
 #     - migrate
 
+# Optional: TLS settings for corporate proxy environments
+# tls:
+#   caStore: "system"              # Use OS certificate store (DENO_TLS_CA_STORE)
+#   certFile: "/path/to/ca.pem"   # Custom CA certificate (DENO_CERT)
+#   ignoreCertErrors: true         # Disable TLS verification (not recommended for production)
+
 source:
   projectKey: us-production
   # allProjects: true        # Migrate ALL projects from source account (overrides projectKey)
