@@ -358,6 +358,8 @@ migration:                   # Optional - for migrate step
   environmentMapping:
     sourceEnv: destEnv
   dryRun: boolean           # Preview changes without applying
+  createProject: boolean    # Auto-create destination project if missing (default: false)
+  createEnvironments: boolean # Auto-create missing environments from source (default: false)
 
 thirdPartyImport:           # Required for third-party-import step
   inputFile: string          # JSON or CSV file path
@@ -502,6 +504,8 @@ migration:                   # Migration settings
   environmentMapping:                   # Optional, key-value mapping
     sourceEnv: destEnv
     ...
+  createProject: boolean                # Default: false - auto-create dest project
+  createEnvironments: boolean           # Default: false - auto-create missing envs
 ```
 
 ### Priority Order
@@ -647,17 +651,18 @@ Reading flag 1 of 50 : my-feature
 
 **Notes:**
 - Only mapped source environments will be migrated
-- Destination environments must already exist in the target project
-- If a mapped destination environment doesn't exist, migration will abort with error
+- Destination environments must already exist in the target project (unless `--create-environments` is used)
+- If a mapped destination environment doesn't exist, migration will abort with error (or auto-create it if `--create-environments` is enabled)
 - Environment keys are case-sensitive
 - Can be combined with `-e` flag for additional filtering
 
 **Error handling:**
 ```bash
-# If destination environment doesn't exist:
+# If destination environment doesn't exist (without --create-environments):
 Error: The following mapped destination environments don't exist in target project:
   prod → production (destination "production" not found)
 Available destination environments: dev, staging, test
+Use --create-environments to auto-create them.
 ```
 
 ### Environment Filtering
@@ -896,14 +901,14 @@ configured in `deno.json` and include all necessary permissions.
    - Creates a mapping file in `data/launchdarkly-migrations/mappings/maintainer_mapping.json`
    - Shows a summary of mapped and unmapped members
 
-3. **migrate**: Creates a new project or migrates into an existing project
+3. **migrate**: Migrates flags, segments, and environments into a destination project
    - Requires network access for API calls
    - Requires file system access to read source data
-   - Can create a new project or use an existing one
-   - Verifies environment compatibility when using existing projects
-   - Creates flags, segments, and environments (if creating new project)
+   - Destination project must already exist (or use `--create-project` to auto-create)
+   - Verifies environment compatibility (or use `--create-environments` to auto-create missing ones)
+   - Creates flags, segments, and patches environment configs
    - Can optionally map source maintainer IDs to destination maintainer IDs if the mapping
-     was done (step 2) maintainers if mapping was done
+     was done (step 2)
 
 4. **estimate-migration-time**: (Optional) Estimates the time needed for migration
    - Analyzes source project to count resources
@@ -970,6 +975,10 @@ don't need to specify them manually.
 - `--domain`: (Optional) Destination LaunchDarkly domain, defaults to `app.launchdarkly.com`. Use `app.eu.launchdarkly.com` for EU instances.
 - `-f, --config`: (Optional) Path to YAML configuration file. All migration settings
   can be specified in the config file. CLI arguments override config file values.
+- `--create-project`: (Optional) Auto-create the destination project if it doesn't
+  exist. Uses the source project's name and key. Defaults to false.
+- `--create-environments`: (Optional) Auto-create missing environments on the
+  destination from source metadata (name, key, color, TTL, tags, etc.). Defaults to false.
 
 ### estimate_time.ts
 
@@ -990,10 +999,10 @@ don't need to specify them manually.
 - Flag Maintainer IDs are different between the account instances and must be mapped
   using the `map-members` script before migration
 - Environment names and keys must match between source and destination projects
-  when migrating to an existing project
-- The destination project can either be new or existing:
-  - For new projects: All environments will be created automatically
-  - For existing projects: Only environments that exist in both projects will be migrated
+  when migrating to an existing project (unless `--create-environments` is used)
+- The destination project must already exist (unless `--create-project` is used to auto-create it)
+- For existing projects: only environments that exist in both projects will be migrated
+  (unless `--create-environments` is used to auto-create missing ones)
 - Segment migration can be skipped using the `-s=false` flag if needed
 - Unbounded (big) segments are automatically skipped during migration
 - The tool uses a fixed API version (20240415) which may need to be updated for

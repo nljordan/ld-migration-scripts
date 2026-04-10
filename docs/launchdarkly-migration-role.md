@@ -5,7 +5,7 @@ Use a **custom role** when you want a single API key (or member) to have:
 - **Read-only** access to a **source project** (flags, segments, etc.)
 - **Write** access to a **destination project** (create/update flags, segments)
 
-This policy uses only [valid role-actions](https://launchdarkly.com/docs/home/account/roles/role-actions). It does not grant listing or viewing members (no such action exists in the Member actions reference); for **map-members** or **migrate**’s `members/me` fallback, use a token that also has a preset role (e.g. Reader) or accept limited behavior.
+This policy uses only [valid role-actions](https://launchdarkly.com/docs/home/account/roles/role-actions). It does not grant listing or viewing members (no such action exists in the Member actions reference); for **map-members** or **migrate**'s `members/me` fallback, use a token that also has a preset role (e.g. Reader) or accept limited behavior.
 
 This is useful for same-account migrations or when you prefer one token with least-privilege scoping instead of separate Reader and Writer keys.
 
@@ -17,10 +17,10 @@ LaunchDarkly custom roles are defined by **policies**: JSON arrays of statements
 |------------------------|--------|------------------------|
 | **extract-source** | Project, environments, flags, segments (read) | — |
 | **map-members** | Members (read) | Members (read) |
-| **migrate** | — | Project, environments, flags, segments, **views**, **approval-requests** (read + write) |
+| **migrate** | — | Project (read; optionally create), environments (read; optionally create), flags, segments, **views**, **approval-requests** (read + write) |
 | **revert** | — | Flags, views, approval-requests (read, patch, delete) |
 
-Resource specifiers are hierarchical, e.g. `proj/<projectKey>:env/<envKey>:flag/<flagKey>`. Use `*` for “all” at any level.
+Resource specifiers are hierarchical, e.g. `proj/<projectKey>:env/<envKey>:flag/<flagKey>`. Use `*` for "all" at any level. Wildcards are [fully supported](https://launchdarkly.com/docs/home/account/role-resources) — `proj/*:env/*:flag/*` matches all flags across every project and environment in the account.
 
 ## 1. Create the custom role
 
@@ -32,15 +32,21 @@ Resource specifiers are hierarchical, e.g. `proj/<projectKey>:env/<envKey>:flag/
 
 ## 2. Policy JSON
 
-Replace `SOURCE_PROJECT` and `DEST_PROJECT` with your actual project keys.
+Two variants are provided. Use **Variant A** when migrating between two specific projects (least privilege). Use **Variant B** when one token needs write access across all projects in the account (e.g. a platform team running migrations for many teams).
 
-**Docs on roles and role actions:** The [role-actions reference](https://launchdarkly.com/docs/home/account/roles/role-actions) see more info on common roles and role-actions
+**Docs on roles and role actions:** The [role-actions reference](https://launchdarkly.com/docs/home/account/roles/role-actions) has more info on common roles and role-actions.
+
+---
+
+### Variant A — Specific source → specific destination (least privilege)
+
+Replace `SOURCE_PROJECT` and `DEST_PROJECT` with your actual project keys.
 
 ```json
 [
   {
     "resources": [
-      "proj/${SOURCE_PROJECT}"
+      "proj/SOURCE_PROJECT"
     ],
     "actions": [
       "viewProject"
@@ -49,7 +55,36 @@ Replace `SOURCE_PROJECT` and `DEST_PROJECT` with your actual project keys.
   },
   {
     "resources": [
-      "proj/${DEST_PROJECT}:env/*:flag/*"
+      "proj/SOURCE_PROJECT:env/*:flag/*"
+    ],
+    "actions": [
+      "viewFlag"
+    ],
+    "effect": "allow"
+  },
+  {
+    "resources": [
+      "proj/SOURCE_PROJECT:env/*:segment/*"
+    ],
+    "actions": [
+      "viewSegment"
+    ],
+    "effect": "allow"
+  },
+  {
+    "resources": [
+      "proj/DEST_PROJECT"
+    ],
+    "actions": [
+      "viewProject",
+      "createProject",
+      "createEnvironment"
+    ],
+    "effect": "allow"
+  },
+  {
+    "resources": [
+      "proj/DEST_PROJECT:env/*:flag/*"
     ],
     "actions": [
       "createFlag",
@@ -105,7 +140,7 @@ Replace `SOURCE_PROJECT` and `DEST_PROJECT` with your actual project keys.
   },
   {
     "resources": [
-      "proj/${DEST_PROJECT}:env/*:segment/*"
+      "proj/DEST_PROJECT:env/*:segment/*"
     ],
     "actions": [
       "createSegment",
@@ -122,32 +157,169 @@ Replace `SOURCE_PROJECT` and `DEST_PROJECT` with your actual project keys.
       "deleteSegment"
     ],
     "effect": "allow"
-  },
+  }
+]
+```
+
+---
+
+### Variant B — Specific source → all destination projects (wildcard)
+
+Use this when one token must write to any project in the account. Replace `SOURCE_PROJECT` with your source project key. The `proj/*` wildcard matches every project in the account — assign this to a **dedicated service account token**, not a human member.
+
+```json
+[
   {
     "resources": [
-      "proj/${DEST_PROJECT}"
+      "proj/SOURCE_PROJECT"
     ],
     "actions": [
       "viewProject"
+    ],
+    "effect": "allow"
+  },
+  {
+    "resources": [
+      "proj/SOURCE_PROJECT:env/*:flag/*"
+    ],
+    "actions": [
+      "viewFlag"
+    ],
+    "effect": "allow"
+  },
+  {
+    "resources": [
+      "proj/SOURCE_PROJECT:env/*:segment/*"
+    ],
+    "actions": [
+      "viewSegment"
+    ],
+    "effect": "allow"
+  },
+  {
+    "resources": [
+      "proj/*"
+    ],
+    "actions": [
+      "viewProject",
+      "createProject",
+      "createEnvironment"
+    ],
+    "effect": "allow"
+  },
+  {
+    "resources": [
+      "proj/*:env/*:flag/*"
+    ],
+    "actions": [
+      "createFlag",
+      "updateName",
+      "updateOn",
+      "updateDescription",
+      "updateIncludeInSnippet",
+      "updateClientSideFlagAvailability",
+      "updateTemporary",
+      "updateTags",
+      "updateDeprecated",
+      "updatePrerequisites",
+      "updateTargets",
+      "updateRules",
+      "updateFlagRuleDescription",
+      "updateFallthrough",
+      "updateFlagVariations",
+      "updateFlagDefaultVariations",
+      "updateOffVariation",
+      "updateMaintainer",
+      "updateAttachedGoals",
+      "updateExperimentActive",
+      "updateExperimentBaseline",
+      "updateFlagCustomProperties",
+      "updateFlagSalt",
+      "updateTrackEvents",
+      "updateFlagFallthroughTrackEvents",
+      "updateGlobalArchived",
+      "updateExpiringTargets",
+      "updateFeatureWorkflows",
+      "updateScheduledChanges",
+      "updateTriggers",
+      "updateApprovalRequest",
+      "updateFlagLink",
+      "updateFlagCodeReferences",
+      "updateReleasePhaseCompleted",
+      "updateReleasePhaseStatus",
+      "updateFlagConfigMigrationSettings",
+      "updateMeasuredRolloutConfiguration",
+      "updateFallthroughWithMeasuredRollout",
+      "updateRulesWithMeasuredRollout",
+      "createExperiment",
+      "createTriggers",
+      "createApprovalRequest",
+      "createFlagLink",
+      "deleteFlag",
+      "deleteFlagLink",
+      "deleteTriggers",
+      "removeReleasePipeline",
+      "deleteFlagAttachedGoalResults"
+    ],
+    "effect": "allow"
+  },
+  {
+    "resources": [
+      "proj/*:env/*:segment/*"
+    ],
+    "actions": [
+      "createSegment",
+      "updateName",
+      "updateDescription",
+      "updateTags",
+      "updateIncluded",
+      "createApprovalRequest",
+      "updateExcluded",
+      "updateRules",
+      "updateExpiringTargets",
+      "updateScheduledChanges",
+      "createSegmentExport",
+      "deleteSegment"
     ],
     "effect": "allow"
   }
 ]
 ```
 
-- **Each statement:** One resource kind only (env, flag, approvalRequest, segment, or view), so the policy satisfies “same kind of resource” per statement. Only destination project is granted; replace `DEST_PROJECT_KEY` with your destination project key.
-- **Source:** This custom role does not grant source read (no valid view actions in one-resource-kind form for many instances). Use a preset Reader role or a separate source key for **extract-source**.
-- **Destination:** Create/update environments, flags and segments, and allow deletion of flags and segments for revert feature.
-
+- **Source (both variants):** Read-only access via `viewProject`, `viewFlag`, and `viewSegment` — enough for `extract-source` to enumerate all flags and segments.
+- **Destination (both variants):** `createProject` and `createEnvironment` are included for the optional `--create-project` and `--create-environments` flags. If you don't use those flags, these actions are unused but harmless.
+- **Destination Variant A:** Scoped write access to a single named destination project.
+- **Destination Variant B:** Wildcard write access across all projects. Use a dedicated service token.
 
 ## 3. Assign the role
 
-- **API access token:** Create an access token and assign this custom role to it (e.g. under **Account settings** → **Authorization** → **Access tokens**). Use that token as the API key for both source and destination in this repo’s config when migrating within one account. Use role custom, and the named role to apply to this specific key.
+- **API access token:** Create an access token and assign this custom role to it (e.g. under **Account settings** → **Authorization** → **Access tokens**). Use that token as the API key for both source and destination in this repo's config when migrating within one account. Use role custom, and the named role to apply to this specific key.
 
 ## 4. For use with [launchdarkly-labs/ld-migration-scripts](https://github.com/launchdarkly-labs/ld-migration-scripts)
 
-- **Same-account migration:** In `config/api_keys.json`, set both `source_account_api_key` and `destination_account_api_key` to the same token that has this custom role (with `SOURCE_PROJECT_KEY` and `DEST_PROJECT_KEY` set as above).
+- **Same-account migration:** In `config/api_keys.json`, set both `source_account_api_key` and `destination_account_api_key` to the same token that has this custom role (with `SOURCE_PROJECT` and `DEST_PROJECT` set as above).
 - **Two accounts:** Keep using two keys (source = Reader or custom read-only, destination = Writer or custom write-only). You can still use a custom role on each account that matches the same read vs write pattern per project.
+
+## 5. Generate policy JSON with a script
+
+Use `scripts/generate-migration-policy.sh` to generate a ready-to-paste `policy.json` file from the command line.
+
+**Variant A** — one source, one destination:
+```bash
+./scripts/generate-migration-policy.sh --source my-source-project --dest my-dest-project
+```
+
+**Variant B** — one source, wildcard destinations (all projects):
+```bash
+./scripts/generate-migration-policy.sh --source my-source-project --wildcard
+```
+
+**Multiple named destinations** (generates one policy covering all of them):
+```bash
+./scripts/generate-migration-policy.sh --source my-source-project --dest project-a --dest project-b --dest project-c
+```
+
+Output is written to `policy.json` in the current directory (override with `--output path/to/file.json`).
 
 ## References
 
