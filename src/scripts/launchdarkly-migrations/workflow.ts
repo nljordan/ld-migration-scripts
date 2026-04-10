@@ -172,7 +172,7 @@ const buildExtractSourceArgs = (config: WorkflowConfig): string[] => {
     ["--allow-net", "--allow-read", "--allow-write"]
   );
 
-  let args = [...baseArgs, "-p", config.source.projectKey];
+  let args = [...baseArgs, "-p", config.source.projectKey!];
   args = addOptionalArg(args, "--domain", config.source.domain);
   
   // Only extract segments if explicitly enabled AND migration will use them
@@ -283,8 +283,8 @@ const buildMigrateArgs = (config: WorkflowConfig): string[] => {
 
   const withProjects = [
     ...baseArgs,
-    "-p", config.source.projectKey,
-    "-d", config.destination!.projectKey
+    "-p", config.source.projectKey!,
+    "-d", config.destination!.projectKey!
   ];
 
   const withMigrationOpts = [...withProjects, ...buildMigrationArgs(config)];
