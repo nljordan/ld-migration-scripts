@@ -41,6 +41,8 @@ interface WorkflowConfig {
     incremental?: boolean;
     since?: string;
     ruleValueReplacements?: { attribute?: string; match?: string; replace?: string; action?: "replace" | "remove" }[];
+    createProject?: boolean;
+    createEnvironments?: boolean;
   };
   thirdPartyImport?: {
     inputFile: string;
@@ -249,6 +251,8 @@ const buildMigrationArgs = (config: WorkflowConfig): string[] => {
   args = addBooleanFlag(args, "-s=false", migration.migrateSegments === false);
   args = addBooleanFlag(args, "--dry-run", migration.dryRun);
   args = addBooleanFlag(args, "--incremental", migration.incremental);
+  args = addBooleanFlag(args, "--create-project", migration.createProject);
+  args = addBooleanFlag(args, "--create-environments", migration.createEnvironments);
   args = addOptionalArg(args, "-c", migration.conflictPrefix);
   args = addOptionalArg(args, "-v", migration.targetView);
   args = addOptionalArg(args, "-e", migration.environments?.join(","));

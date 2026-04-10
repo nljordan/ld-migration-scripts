@@ -49,3 +49,22 @@ migration:
     production: production
     staging: staging
 
+  # Auto-create destination project if it doesn't exist (uses source project name)
+  # createProject: true
+
+  # Auto-create missing environments on destination from source metadata
+  # createEnvironments: true
+
+  # Optional: Transform rule clause values during migration.
+  # Each entry replaces or removes matching clauses in rules.
+  # 'attribute' is optional — if omitted, matches values in any clause attribute.
+  # 'action' defaults to "replace". Use "remove" to drop matching clauses entirely.
+  # ruleValueReplacements:
+  #   - attribute: "versionName"
+  #     action: "remove"                # drops any clause targeting versionName
+  #   - attribute: "versionName"
+  #     match: "26.3.30"
+  #     replace: "1.0.0"               # replaces 26.3.30 -> 1.0.0 in versionName clauses
+  #   - match: "CVS"
+  #     replace: "Health100"           # replaces CVS -> Health100 in any clause
+
