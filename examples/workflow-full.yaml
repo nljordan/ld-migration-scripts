@@ -11,6 +11,7 @@
 
 source:
   projectKey: us-production
+  # allProjects: true        # Migrate ALL projects from source account (overrides projectKey)
   domain: app.launchdarkly.com  # Optional: Defaults to app.launchdarkly.com
 
 destination:

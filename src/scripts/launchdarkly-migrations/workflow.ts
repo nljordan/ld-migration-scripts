@@ -9,6 +9,8 @@
 import yargs from "https://deno.land/x/yargs@v17.7.2-deno/deno.ts";
 import { parse as parseYaml } from "https://deno.land/std@0.224.0/yaml/parse.ts";
 import * as Colors from "https://deno.land/std@0.149.0/fmt/colors.ts";
+import { getSourceApiKey } from "../../utils/api_keys.ts";
+import { ldAPIRequest, rateLimitRequest } from "../../utils/utils.ts";
 
 // ==================== Type Definitions ====================
 
@@ -17,11 +19,12 @@ interface WorkflowConfig {
     steps?: string[];
   };
   source: {
-    projectKey: string;
+    projectKey?: string;
+    allProjects?: boolean;
     domain?: string;
   };
   destination?: {
-    projectKey: string;
+    projectKey?: string;
     domain?: string;
   };
   extraction?: {
@@ -442,7 +445,11 @@ const printWorkflowHeader = (config: WorkflowConfig, steps: string[]): void => {
   console.log(Colors.blue(`\n🚀 LaunchDarkly Migration Workflow`));
   console.log(Colors.blue(`${divider}\n`));
   console.log(Colors.cyan(`Configuration loaded: ${inputArgs.config}`));
-  console.log(Colors.cyan(`Source Project: ${config.source.projectKey}`));
+  if (config.source.allProjects && !config.source.projectKey) {
+    console.log(Colors.cyan(`Source: All projects from ${config.source.domain || "app.launchdarkly.com"}`));
+  } else {
+    console.log(Colors.cyan(`Source Project: ${config.source.projectKey}`));
+  }
   
   if (config.destination?.projectKey) {
     console.log(Colors.cyan(`Destination Project: ${config.destination.projectKey}`));
@@ -467,6 +474,32 @@ const printWorkflowCompletion = (): void => {
 const getWorkflowSteps = (config: WorkflowConfig): string[] =>
   config.workflow?.steps || DEFAULT_WORKFLOW_STEPS;
 
+// ==================== All-Projects Discovery ====================
+
+async function discoverProjects(domain: string): Promise<string[]> {
+  const apiKey = await getSourceApiKey();
+  const allKeys: string[] = [];
+  let offset = 0;
+  const limit = 20;
+  let hasMore = true;
+
+  while (hasMore) {
+    const req = ldAPIRequest(apiKey, domain, `projects?limit=${limit}&offset=${offset}`);
+    const resp = await rateLimitRequest(req, "projects");
+    if (resp.status !== 200) {
+      console.log(Colors.red(`Failed to list projects (${resp.status}): ${await resp.text()}`));
+      Deno.exit(1);
+    }
+    const data = await resp.json();
+    for (const proj of (data.items || [])) {
+      allKeys.push(proj.key);
+    }
+    hasMore = !!data._links?.next;
+    offset += limit;
+  }
+  return allKeys;
+}
+
 // ==================== Main Entry Point ====================
 
 /**
@@ -475,10 +508,34 @@ const getWorkflowSteps = (config: WorkflowConfig): string[] =>
 const main = async (): Promise<void> => {
   const config = await loadConfig(inputArgs.config);
   const steps = getWorkflowSteps(config);
-  
-  printWorkflowHeader(config, steps);
-  await executeWorkflowSteps(steps, config);
-  printWorkflowCompletion();
+
+  if (!config.source.allProjects && !config.source.projectKey) {
+    console.log(Colors.red("Error: source.projectKey is required (or set source.allProjects: true)"));
+    Deno.exit(1);
+  }
+
+  if (config.source.allProjects) {
+    const domain = config.source.domain || "app.launchdarkly.com";
+    console.log(Colors.blue(`\nDiscovering all projects from ${domain}...`));
+    const projectKeys = await discoverProjects(domain);
+    console.log(Colors.cyan(`Found ${projectKeys.length} project(s): ${projectKeys.join(", ")}\n`));
+
+    for (const [i, key] of projectKeys.entries()) {
+      console.log(Colors.blue(`\n[${i + 1}/${projectKeys.length}] Processing project: ${key}`));
+      const perProjectConfig: WorkflowConfig = {
+        ...config,
+        source: { ...config.source, projectKey: key },
+        destination: { ...config.destination, projectKey: key },
+      };
+      printWorkflowHeader(perProjectConfig, steps);
+      await executeWorkflowSteps(steps, perProjectConfig);
+    }
+    printWorkflowCompletion();
+  } else {
+    printWorkflowHeader(config, steps);
+    await executeWorkflowSteps(steps, config);
+    printWorkflowCompletion();
+  }
 };
 
 if (import.meta.main) {
