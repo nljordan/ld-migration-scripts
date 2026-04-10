@@ -553,7 +553,7 @@ const main = async (): Promise<void> => {
       console.log(Colors.blue(`\n[${i + 1}/${projectKeys.length}] Processing project: ${key}`));
       const perProjectConfig: WorkflowConfig = {
         ...config,
-        source: { ...config.source, projectKey: key },
+        source: { ...config.source, projectKey: key, allProjects: false, projectKeys: undefined },
         destination: { ...config.destination, projectKey: key },
       };
       printWorkflowHeader(perProjectConfig, steps);
@@ -568,7 +568,7 @@ const main = async (): Promise<void> => {
       console.log(Colors.blue(`\n[${i + 1}/${projectKeys.length}] Processing project: ${key}`));
       const perProjectConfig: WorkflowConfig = {
         ...config,
-        source: { ...config.source, projectKey: key },
+        source: { ...config.source, projectKey: key, projectKeys: undefined },
         destination: { ...config.destination, projectKey: key },
       };
       printWorkflowHeader(perProjectConfig, steps);
