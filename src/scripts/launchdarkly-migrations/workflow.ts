@@ -457,12 +457,12 @@ const printWorkflowHeader = (config: WorkflowConfig, steps: string[]): void => {
   console.log(Colors.blue(`\n🚀 LaunchDarkly Migration Workflow`));
   console.log(Colors.blue(`${divider}\n`));
   console.log(Colors.cyan(`Configuration loaded: ${inputArgs.config}`));
-  if (config.source.allProjects && !config.source.projectKey) {
+  if (config.source.projectKey) {
+    console.log(Colors.cyan(`Source Project: ${config.source.projectKey}`));
+  } else if (config.source.allProjects) {
     console.log(Colors.cyan(`Source: All projects from ${config.source.domain || "app.launchdarkly.com"}`));
   } else if (config.source.projectKeys && config.source.projectKeys.length > 0) {
     console.log(Colors.cyan(`Source: ${config.source.projectKeys.length} specific project(s) from ${config.source.domain || "app.launchdarkly.com"}`));
-  } else {
-    console.log(Colors.cyan(`Source Project: ${config.source.projectKey}`));
   }
   
   if (config.destination?.projectKey) {
