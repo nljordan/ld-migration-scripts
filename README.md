@@ -221,9 +221,11 @@ For more information about using Deno tasks, see
 The workflow orchestrator allows you to run complete end-to-end migrations from a single YAML config file. It supports:
 
 - ✅ **Full workflow automation** - Extract → Map → Migrate in one command
+- ✅ **Multi-project migrations** - Migrate many projects via `source.projectKeys` (same key on destination)
 - ✅ **Selective step execution** - Run only the steps you need
 - ✅ **Third-party imports** - Import flags from external sources
 - ✅ **Default behavior** - Runs full workflow if no steps specified
+- ✅ **TLS options** - Ignore certificate errors for corporate proxies or custom instances (insecure; use only when needed)
 
 ### Full Workflow (Default)
 
@@ -298,6 +300,47 @@ migration:
 deno task workflow -f workflow-migrate-only.yaml
 ```
 
+### Multi-Project Workflow
+
+Use `source.projectKeys` to migrate an explicit list of projects. Each source key is migrated to a destination project with the **same key** (typical account/region moves where project keys are preserved).
+
+Account-level steps (`map-members`, `extract-account`, `migrate-roles`, `migrate-teams`, `third-party-import`) run **once**. Project-level steps (`extract-source`, `migrate`, `revert`) run **once per project** in list order.
+
+```yaml
+workflow:
+  steps:
+    - map-members
+    - extract-source
+    - migrate
+
+source:
+  projectKeys:
+    - payroll
+    - benefits
+  domain: app.launchdarkly.com
+
+destination:
+  domain: app.launchdarkly.us
+
+migration:
+  assignMaintainerIds: true
+```
+
+When using `projectKeys`, set `accountMigration.projectKeyMapping` if custom role policies reference `proj/<key>` and keys differ between accounts. Implicit `source.projectKey` → `destination.projectKey` mapping applies only for single-project configs.
+
+See `examples/workflow-multi-project.yaml` and `examples/workflow-dayforce.yaml`.
+
+### TLS / Certificate Errors
+
+Child workflow steps receive Deno's `--unsafely-ignore-certificate-errors` when set under `workflow`:
+
+```yaml
+workflow:
+  ignoreCertificateErrors: true
+```
+
+This is **insecure** — use only behind corporate TLS inspection or when you understand the risk. Passing `--unsafely-ignore-certificate-errors` only on the parent `deno task workflow` command does **not** propagate to child scripts; set `workflow.ignoreCertificateErrors` in the YAML instead.
+
 ### Third-Party Flag Import
 
 ```yaml
@@ -342,18 +385,20 @@ migration:
 
 ```yaml
 workflow:                    # Optional - defaults to full workflow
-  steps:                     # List of steps to execute in order
-    - extract-source         # Download source project data
-    - map-members           # Map member IDs
-    - migrate               # Run migration
-    - third-party-import    # Or import from external sources
+  steps:                     # Account steps run once; project steps repeat per key
+    - extract-source         # Download source project data (per project)
+    - map-members           # Map member IDs (account-level, once)
+    - migrate               # Run migration (per project)
+    - third-party-import    # Or import from external sources (account-level)
+  ignoreCertificateErrors: boolean  # TLS: pass --unsafely-ignore-certificate-errors to child steps
 
-source:                      # Required
-  projectKey: string         # Source project key
+source:                      # Required: projectKey OR projectKeys
+  projectKey: string         # Single source project
+  projectKeys: string[]      # Multiple projects (same key on destination each)
   domain: string            # Optional: Defaults to app.launchdarkly.com
 
-destination:                 # Required for migrate step
-  projectKey: string         # Destination project key
+destination:                 # Required for migrate step (per-project key set automatically when using projectKeys)
+  projectKey: string         # Destination project key (single-project mode)
   domain: string            # Optional: Defaults to app.launchdarkly.com
 
 extraction:                  # Optional - controls what data to extract
@@ -471,6 +516,8 @@ Only **user-created** custom roles are migrated (LaunchDarkly preset roles are s
 - `examples/workflow-migrate-only.yaml` - Migrate with pre-extracted data
 - `examples/workflow-third-party.yaml` - Third-party flag import
 - `examples/workflow-custom-steps.yaml` - Custom step combinations
+- `examples/workflow-multi-project.yaml` - Multiple projects via `source.projectKeys`
+- `examples/workflow-dayforce.yaml` - Multi-project list via `source.projectKeys`
 
 ## Configuration File Support (Individual Migrate Task)
 

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-project workflow**: `source.projectKeys` runs account-level steps once and project steps (`extract-source`, `migrate`, `revert`) per key; destination uses the same key for each project
+- **TLS in workflow YAML**: `workflow.ignoreCertificateErrors` propagates `--unsafely-ignore-certificate-errors` to all child Deno steps via `buildDenoRunArgs`
 - **Custom roles & teams migration** (opt-in workflow steps):
   - `extract-account` — download user-created custom roles and teams to `data/launchdarkly-migrations/source/account/`
   - `migrate-roles` — create or update custom roles in the destination (policy project-key remapping, conflict prefix, dry-run)
