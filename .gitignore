@@ -2,3 +2,23 @@ data/*
 config/api_keys.json
 config/server_side_sdk_keys.json
 TESTING.md
+# Secrets and local config — never commit
+config/api_keys.json
+config/api_keys*.json
+config/*api_keys*
+config/server_side_sdk_keys.json
+config/server_side_sdk_keys*.json
+!config/api_keys.json.example
+!config/server_side_sdk_keys.json.example
+# Keep templates and tooling
+!config/import_map.json
+!config/tsconfig.json
+Simpler alternative if globs feel risky:
+
+config/api_keys.json
+config/api_keys*.json
+!config/api_keys.json.example
+config/server_side_sdk_keys.json
+config/server_side_sdk_keys*.json
+!config/server_side_sdk_keys.json.example
+config/source-policy-*.json
