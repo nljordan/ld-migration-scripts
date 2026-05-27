@@ -4,7 +4,7 @@
 [![Deno](https://img.shields.io/badge/deno-v2.x-blue.svg)](https://deno.land/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Set of scripts intended for migrating LaunchDarkly projects between different accounts, regions, or instances. The supported resources include: environments, flags, segments, and maintainer mappings.
+Set of scripts intended for migrating LaunchDarkly projects between different accounts, regions, or instances. The supported resources include: environments, flags, segments, maintainer mappings, custom roles, and teams.
 
 ## Overview
 
@@ -23,6 +23,7 @@ Features that are currently supported:
 - Feature flags and their configurations
 - Segments and targeting rules
 - Maintainer mapping across different account instances
+- **Custom roles & teams** (opt-in): Extract and migrate user-created custom roles and teams between accounts (Enterprise plan required for custom roles)
 - **Views support**: Automatic extraction and creation of views with flag linkage
 - **Conflict resolution**: Automatic handling of resource key conflicts with configurable prefixes
 - **Include/exclude flags**: Migrate only specific flags or exclude certain flags from migration
@@ -45,7 +46,9 @@ root/
 │   └── flags_template.csv    # CSV flag import template
 ├── data/                 # Data directory organized by purpose
 │   ├── launchdarkly-migrations/        # LD migration data
-│   │   ├── source/       # Downloaded source project data
+│   │   ├── source/       # Downloaded source project & account data
+│   │   │   ├── project/  # Per-project flags, segments, etc.
+│   │   │   └── account/  # Roles and teams (extract-account)
 │   │   └── mappings/     # Mapping files (e.g., maintainer IDs)
 │   └── third-party-migrations/         # External import data
 │       ├── import-files/ # Template and import files
@@ -359,6 +362,18 @@ extraction:                  # Optional - controls what data to extract
 memberMapping:               # Optional - for map-members step
   outputFile: string         # Where to save mapping file
 
+accountMigration:            # Optional - for extract-account, migrate-roles, migrate-teams
+  includeRoles: boolean      # Extract/migrate roles (default: true when step runs)
+  includeTeams: boolean
+  conflictPrefix: string     # Prefix for role/team key conflicts
+  includeRolesKeys: string[]
+  excludeRolesKeys: string[]
+  includeTeamsKeys: string[]
+  excludeTeamsKeys: string[]
+  projectKeyMapping:         # Remap proj/<key> in role policies
+    sourceProj: destProj
+  dryRun: boolean            # Overrides migration.dryRun for IAM steps when set
+
 migration:                   # Optional - for migrate step
   assignMaintainerIds: boolean
   migrateSegments: boolean
@@ -387,7 +402,10 @@ revert:                     # Optional - for revert step
 ### Available Steps
 
 - **`extract-source`** - Downloads all data from source project
+- **`extract-account`** - Downloads custom roles and teams from source account (opt-in)
 - **`map-members`** - Creates member ID mappings between instances
+- **`migrate-roles`** - Creates or updates custom roles in destination (opt-in; run after extract-account)
+- **`migrate-teams`** - Creates teams in destination (opt-in; run after map-members and migrate-roles)
 - **`migrate`** - Migrates project to destination
 - **`third-party-import`** - Imports flags from external JSON/CSV files
 - **`revert`** - Reverts a previously executed migration
@@ -417,6 +435,34 @@ data/launchdarkly-migrations/source/project/{projectKey}/
 - `migration.migrateSegments` is set to `true`
 
 By default, segments are **not** extracted unless explicitly needed, preventing unnecessary API calls and storage.
+
+### Account IAM migration (opt-in)
+
+Custom roles and teams are **account-level**. They are not included in the default workflow. Use explicit steps and see [`examples/workflow-account-iam.yaml`](examples/workflow-account-iam.yaml):
+
+```bash
+deno task workflow -f examples/workflow-account-iam.yaml
+```
+
+Recommended order: `map-members` → `extract-account` → `migrate-roles` → `migrate-teams` → `extract-source` → `migrate`.
+
+Standalone tasks:
+
+```bash
+deno task extract-account --domain app.launchdarkly.com
+deno task migrate-roles --domain app.launchdarkly.com --source-project us-prod --dest-project eu-prod
+deno task migrate-teams --domain app.launchdarkly.com
+```
+
+Extracted account data:
+
+```
+data/launchdarkly-migrations/source/account/
+├── roles/{roleKey}.json
+└── teams/{teamKey}.json
+```
+
+Only **user-created** custom roles are migrated (LaunchDarkly preset roles are skipped). Team members are mapped via `maintainer_mapping.json`; unmapped members are omitted with a warning.
 
 ### Workflow Examples Included
 

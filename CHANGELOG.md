@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Custom roles & teams migration** (opt-in workflow steps):
+  - `extract-account` — download user-created custom roles and teams to `data/launchdarkly-migrations/source/account/`
+  - `migrate-roles` — create or update custom roles in the destination (policy project-key remapping, conflict prefix, dry-run)
+  - `migrate-teams` — create teams with remapped member IDs (requires `map-members` mapping file)
+  - Shared utilities in `src/utils/account_iam.ts` and example [`examples/workflow-account-iam.yaml`](examples/workflow-account-iam.yaml)
+  - Deno tasks: `extract-account`, `migrate-roles`, `migrate-teams`
+
 ## [3.1.0] - 2026-04-29
 
 ### Added
