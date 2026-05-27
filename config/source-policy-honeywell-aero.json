@@ -1,0 +1,17 @@
+[
+  {
+    "resources": ["proj/*"],
+    "actions": ["viewProject"],
+    "effect": "allow"
+  },
+  {
+    "resources": ["proj/*:env/*:flag/*"],
+    "actions": ["viewFlag"],
+    "effect": "allow"
+  },
+  {
+    "resources": ["proj/*:env/*:segment/*"],
+    "actions": ["viewSegment"],
+    "effect": "allow"
+  }
+]

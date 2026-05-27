@@ -16,7 +16,10 @@ LaunchDarkly custom roles are defined by **policies**: JSON arrays of statements
 | Workflow step / script | Source | Destination / account |
 |------------------------|--------|------------------------|
 | **extract-source** | Project, environments, flags, segments (read) | — |
+| **extract-account** | Custom roles, teams (read) | — |
 | **map-members** | Members (read) | Members (read) |
+| **migrate-roles** | — | Custom roles (create, update policy) |
+| **migrate-teams** | — | Teams (create) |
 | **migrate** | — | Project, environments, flags, segments, **views**, **approval-requests** (read + write) |
 | **revert** | — | Flags, views, approval-requests (read, patch, delete) |
 
@@ -139,6 +142,14 @@ Replace `SOURCE_PROJECT` and `DEST_PROJECT` with your actual project keys.
 - **Source:** This custom role does not grant source read (no valid view actions in one-resource-kind form for many instances). Use a preset Reader role or a separate source key for **extract-source**.
 - **Destination:** Create/update environments, flags and segments, and allow deletion of flags and segments for revert feature.
 
+### Account IAM steps (opt-in)
+
+For **extract-account**, **migrate-roles**, and **migrate-teams**, API keys need account-level permissions on the appropriate account. Consult the [role actions](https://launchdarkly.com/docs/home/account/roles/role-actions) reference for the exact action names on your plan; typically:
+
+- **Source:** List/view custom roles and teams.
+- **Destination:** Create custom roles, update role policies, create teams.
+
+Custom roles require an **Enterprise** plan. Team migration depends on **map-members** so member IDs can be remapped by email.
 
 ## 3. Assign the role
 

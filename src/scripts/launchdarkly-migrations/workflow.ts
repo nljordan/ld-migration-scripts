@@ -15,6 +15,8 @@ import * as Colors from "https://deno.land/std@0.149.0/fmt/colors.ts";
 interface WorkflowConfig {
   workflow?: {
     steps?: string[];
+    /** When true, child steps run with Deno --unsafely-ignore-certificate-errors (insecure). */
+    ignoreCertificateErrors?: boolean;
   };
   source: {
     projectKey: string;
@@ -29,6 +31,17 @@ interface WorkflowConfig {
   };
   memberMapping?: {
     outputFile?: string;
+  };
+  accountMigration?: {
+    includeRoles?: boolean;
+    includeTeams?: boolean;
+    conflictPrefix?: string;
+    includeRolesKeys?: string[];
+    excludeRolesKeys?: string[];
+    includeTeamsKeys?: string[];
+    excludeTeamsKeys?: string[];
+    projectKeyMapping?: Record<string, string>;
+    dryRun?: boolean;
   };
   migration?: {
     assignMaintainerIds?: boolean;
@@ -63,7 +76,15 @@ interface Arguments {
   config?: string;
 }
 
-type StepName = 'extract-source' | 'map-members' | 'migrate' | 'third-party-import' | 'revert';
+type StepName =
+  | 'extract-source'
+  | 'extract-account'
+  | 'map-members'
+  | 'migrate-roles'
+  | 'migrate-teams'
+  | 'migrate'
+  | 'third-party-import'
+  | 'revert';
 type CommandOptions = { args: string[]; stdout: "inherit"; stderr: "inherit" };
 
 // ==================== Configuration ====================
@@ -150,11 +171,19 @@ const printStepCompletion = (message: string): void => {
 /**
  * Builds base Deno run command args
  */
-const buildBaseRunArgs = (scriptPath: string, permissions: string[]): string[] => [
-  "run",
-  ...permissions,
-  scriptPath
-];
+const buildBaseRunArgs = (
+  scriptPath: string,
+  permissions: string[],
+  config: WorkflowConfig
+): string[] => {
+  const ignoreTls = config.workflow?.ignoreCertificateErrors === true;
+  return [
+    "run",
+    ...(ignoreTls ? ["--unsafely-ignore-certificate-errors"] : []),
+    ...permissions,
+    scriptPath
+  ];
+};
 
 /**
  * Conditionally adds arguments if value exists
@@ -176,7 +205,8 @@ const addBooleanFlag = (args: string[], flag: string, condition?: boolean): stri
 const buildExtractSourceArgs = (config: WorkflowConfig): string[] => {
   const baseArgs = buildBaseRunArgs(
     "src/scripts/launchdarkly-migrations/source_from_ld.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config
   );
 
   let args = [...baseArgs, "-p", config.source.projectKey];
@@ -204,6 +234,33 @@ const runExtractSource = async (config: WorkflowConfig): Promise<void> => {
   printStepCompletion("Source data extraction completed");
 };
 
+// ==================== Extract Account Step ====================
+
+const buildExtractAccountArgs = (config: WorkflowConfig): string[] => {
+  const account = config.accountMigration ?? {};
+  const baseArgs = buildBaseRunArgs(
+    "src/scripts/launchdarkly-migrations/extract_account_from_ld.ts",
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config,
+  );
+
+  let args = addOptionalArg(baseArgs, "--domain", config.source.domain);
+  if (account.includeRoles === false) {
+    args = [...args, "--include-roles=false"];
+  }
+  if (account.includeTeams === false) {
+    args = [...args, "--include-teams=false"];
+  }
+  return args;
+};
+
+const runExtractAccount = async (config: WorkflowConfig): Promise<void> => {
+  printStepHeader("STEP", "Extract Account IAM (Roles & Teams)");
+  const args = buildExtractAccountArgs(config);
+  await executeCommand(args, "Extract account step");
+  printStepCompletion("Account IAM extraction completed");
+};
+
 // ==================== Map Members Step ====================
 
 /**
@@ -212,7 +269,8 @@ const runExtractSource = async (config: WorkflowConfig): Promise<void> => {
 const buildMapMembersArgs = (config: WorkflowConfig): string[] => {
   const baseArgs = buildBaseRunArgs(
     "src/scripts/launchdarkly-migrations/map_members_between_ld_instances.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config
   );
 
   const withOutput = addOptionalArg(baseArgs, "-o", config.memberMapping?.outputFile);
@@ -230,6 +288,103 @@ const runMapMembers = async (config: WorkflowConfig): Promise<void> => {
   printStepCompletion("Member mapping completed");
 };
 
+// ==================== Migrate Roles Step ====================
+
+const buildProjectKeyMapArg = (config: WorkflowConfig): string | undefined => {
+  const explicit = config.accountMigration?.projectKeyMapping;
+  const parts: string[] = [];
+  if (explicit) {
+    parts.push(formatKeyValueMapping(explicit));
+  }
+  const src = config.source.projectKey;
+  const dest = config.destination?.projectKey;
+  if (src && dest && src !== dest) {
+    const implicit = `${src}:${dest}`;
+    if (!explicit?.[src]) parts.push(implicit);
+  }
+  return parts.length > 0 ? parts.join(",") : undefined;
+};
+
+const buildMigrateRolesArgs = (config: WorkflowConfig): string[] => {
+  const account = config.accountMigration ?? {};
+  const baseArgs = buildBaseRunArgs(
+    "src/scripts/launchdarkly-migrations/migrate_custom_roles.ts",
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config,
+  );
+
+  let args = addOptionalArg(baseArgs, "--domain", config.destination?.domain);
+  args = addOptionalArg(args, "--project-key-map", buildProjectKeyMapArg(config));
+  args = addOptionalArg(args, "--source-project", config.source.projectKey);
+  args = addOptionalArg(args, "--dest-project", config.destination?.projectKey);
+  args = addBooleanFlag(args, "--dry-run", accountMigrationDryRun(config));
+  args = addOptionalArg(args, "--conflict-prefix", account.conflictPrefix);
+  args = addOptionalArg(
+    args,
+    "--include-roles",
+    account.includeRolesKeys?.length ? account.includeRolesKeys.join(",") : undefined,
+  );
+  args = addOptionalArg(
+    args,
+    "--exclude-roles",
+    account.excludeRolesKeys?.length ? account.excludeRolesKeys.join(",") : undefined,
+  );
+  return args;
+};
+
+const runMigrateRoles = async (config: WorkflowConfig): Promise<void> => {
+  printStepHeader("STEP", "Migrate Custom Roles");
+  const args = buildMigrateRolesArgs(config);
+  await executeCommand(args, "Migrate roles step");
+  printStepCompletion("Custom roles migration completed");
+};
+
+// ==================== Migrate Teams Step ====================
+
+const buildMigrateTeamsArgs = (
+  config: WorkflowConfig,
+  stepsInRun: string[],
+): string[] => {
+  const account = config.accountMigration ?? {};
+  const baseArgs = buildBaseRunArgs(
+    "src/scripts/launchdarkly-migrations/migrate_teams.ts",
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config,
+  );
+
+  let args = addOptionalArg(baseArgs, "--domain", config.destination?.domain);
+  args = addOptionalArg(args, "--member-mapping", config.memberMapping?.outputFile);
+  args = addBooleanFlag(args, "--dry-run", accountMigrationDryRun(config));
+  args = addOptionalArg(args, "--conflict-prefix", account.conflictPrefix);
+  args = addOptionalArg(
+    args,
+    "--include-teams",
+    account.includeTeamsKeys?.length ? account.includeTeamsKeys.join(",") : undefined,
+  );
+  args = addOptionalArg(
+    args,
+    "--exclude-teams",
+    account.excludeTeamsKeys?.length ? account.excludeTeamsKeys.join(",") : undefined,
+  );
+
+  if (!stepsInRun.includes("map-members")) {
+    console.log(Colors.yellow(
+      "Note: map-members was not in this workflow run. Ensure maintainer_mapping.json exists and is current.",
+    ));
+  }
+  return args;
+};
+
+const runMigrateTeams = async (
+  config: WorkflowConfig,
+  stepsInRun: string[],
+): Promise<void> => {
+  printStepHeader("STEP", "Migrate Teams");
+  const args = buildMigrateTeamsArgs(config, stepsInRun);
+  await executeCommand(args, "Migrate teams step");
+  printStepCompletion("Teams migration completed");
+};
+
 // ==================== Migrate Step ====================
 
 /**
@@ -245,10 +400,16 @@ const validateMigrationConfig = (config: WorkflowConfig): void => {
 /**
  * Formats environment mapping as command argument
  */
-const formatEnvMapping = (mapping: Record<string, string>): string =>
+const formatKeyValueMapping = (mapping: Record<string, string>): string =>
   Object.entries(mapping)
     .map(([k, v]) => `${k}:${v}`)
     .join(",");
+
+const formatEnvMapping = formatKeyValueMapping;
+
+/** Dry-run for account IAM steps: accountMigration.dryRun, else migration.dryRun */
+const accountMigrationDryRun = (config: WorkflowConfig): boolean =>
+  config.accountMigration?.dryRun === true || config.migration?.dryRun === true;
 
 /**
  * Builds migration-specific arguments
@@ -286,7 +447,8 @@ const buildMigrationArgs = (config: WorkflowConfig): string[] => {
 const buildMigrateArgs = (config: WorkflowConfig): string[] => {
   const baseArgs = buildBaseRunArgs(
     "src/scripts/launchdarkly-migrations/migrate_between_ld_instances.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config
   );
 
   const withProjects = [
@@ -330,7 +492,8 @@ const buildThirdPartyImportArgs = (config: WorkflowConfig): string[] => {
   
   const baseArgs = buildBaseRunArgs(
     "src/scripts/third-party-migrations/import_flags_from_external.ts",
-    ["--allow-net", "--allow-read", "--allow-write", "--allow-env"]
+    ["--allow-net", "--allow-read", "--allow-write", "--allow-env"],
+    config
   );
 
   const withRequiredArgs = [
@@ -376,7 +539,8 @@ const buildRevertArgs = (config: WorkflowConfig): string[] => {
   
   const baseArgs = buildBaseRunArgs(
     "src/scripts/launchdarkly-migrations/revert_migration.ts",
-    ["--allow-net", "--allow-read", "--allow-write"]
+    ["--allow-net", "--allow-read", "--allow-write"],
+    config
   );
 
   // Use the config file itself as the -f parameter (revert reads from it)
@@ -414,10 +578,13 @@ type StepExecutor = (config: WorkflowConfig) => Promise<void>;
  */
 const STEP_EXECUTORS: Record<StepName, StepExecutor> = {
   'extract-source': runExtractSource,
+  'extract-account': runExtractAccount,
   'map-members': runMapMembers,
+  'migrate-roles': runMigrateRoles,
+  'migrate-teams': (config) => runMigrateTeams(config, []),
   'migrate': runMigrate,
   'third-party-import': runThirdPartyImport,
-  'revert': runRevert
+  'revert': runRevert,
 };
 
 /**
@@ -438,7 +605,11 @@ const executeStep = async (step: string, config: WorkflowConfig): Promise<void> 
  */
 const executeWorkflowSteps = async (steps: string[], config: WorkflowConfig): Promise<void> => {
   for (const step of steps) {
-    await executeStep(step, config);
+    if (step === "migrate-teams") {
+      await runMigrateTeams(config, steps);
+    } else {
+      await executeStep(step, config);
+    }
   }
 };
 
@@ -460,6 +631,11 @@ const printWorkflowHeader = (config: WorkflowConfig, steps: string[]): void => {
   }
   
   console.log(Colors.cyan(`Steps to execute: ${steps.join(" → ")}\n`));
+  if (config.workflow?.ignoreCertificateErrors === true) {
+    console.log(Colors.yellow(
+      "TLS: ignoreCertificateErrors is enabled (--unsafely-ignore-certificate-errors on child steps).\n"
+    ));
+  }
 };
 
 /**

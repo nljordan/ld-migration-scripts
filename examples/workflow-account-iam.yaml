@@ -1,0 +1,41 @@
+# Opt-in workflow: map members → extract account IAM → migrate roles & teams → project migration
+#
+# Prerequisites:
+#   - config/api_keys.json with source and destination API keys
+#   - Enterprise plan (custom roles) on both accounts
+#   - Destination members must exist for team membership (same emails as source)
+#
+# Run:
+#   deno task workflow -f examples/workflow-account-iam.yaml
+
+workflow:
+  steps:
+    - map-members
+    - extract-account
+    - migrate-roles
+    - migrate-teams
+    - extract-source
+    - migrate
+
+source:
+  projectKey: us-production
+  domain: app.launchdarkly.com
+
+destination:
+  projectKey: eu-production
+  domain: app.eu.launchdarkly.com
+
+memberMapping:
+  outputFile: data/launchdarkly-migrations/mappings/maintainer_mapping.json
+
+accountMigration:
+  includeRoles: true
+  includeTeams: true
+  # conflictPrefix: "imported-"
+  projectKeyMapping:
+    us-production: eu-production
+
+migration:
+  assignMaintainerIds: true
+  migrateSegments: true
+  dryRun: false

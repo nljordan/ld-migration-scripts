@@ -863,7 +863,7 @@ export const getViewsFromProject = async (
 export interface ConflictResolution {
   originalKey: string;
   resolvedKey: string;
-  resourceType: 'flag' | 'segment' | 'project';
+  resourceType: 'flag' | 'segment' | 'project' | 'custom-role' | 'team';
   conflictPrefix: string;
 }
 

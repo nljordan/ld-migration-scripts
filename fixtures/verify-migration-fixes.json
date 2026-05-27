@@ -1,0 +1,146 @@
+{
+  "description": "Flag fixtures to verify migration branch fixes (Phase 1 env scoping, Phase 2 variation/rule handling)",
+  "flags": [
+    {
+      "key": "verify-boolean-simple",
+      "name": "Verify Boolean Simple",
+      "description": "Basic boolean - baseline for all envs",
+      "variations": [{"value": true}, {"value": false}],
+      "defaults": {"onVariation": 0, "offVariation": 1},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-string-three",
+      "name": "Verify String Three",
+      "description": "3 variations - rule clamping, addVariation (add 4th on source)",
+      "variations": [{"value": "a"}, {"value": "b"}, {"value": "c"}],
+      "defaults": {"onVariation": 0, "offVariation": 2},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-number-multi",
+      "name": "Verify Number Multi",
+      "description": "Numeric variations",
+      "variations": [{"value": 0}, {"value": 1}, {"value": 5}],
+      "defaults": {"onVariation": 1, "offVariation": 0},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-multi-var-rules",
+      "name": "Verify Multi Var Rules",
+      "description": "5 variations - shrink pre-patch, rule clamping",
+      "variations": [
+        {"value": "v0"},
+        {"value": "v1"},
+        {"value": "v2"},
+        {"value": "v3"},
+        {"value": "v4"}
+      ],
+      "defaults": {"onVariation": 0, "offVariation": 0},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-targets-single",
+      "name": "Verify Targets Single",
+      "description": "Individual target - variationId remap (Phase 2e)",
+      "variations": [{"value": true}, {"value": false}],
+      "defaults": {"onVariation": 0, "offVariation": 1},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-targets-many",
+      "name": "Verify Targets Many",
+      "description": "Many targets - variationId remap (Phase 2e)",
+      "variations": [{"value": 1}, {"value": 2}, {"value": 3}],
+      "defaults": {"onVariation": 0, "offVariation": 0},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-rollout-rule",
+      "name": "Verify Rollout Rule",
+      "description": "Percentage rollout - variation index clamping",
+      "variations": [
+        {"value": "control"},
+        {"value": "variant-a"},
+        {"value": "variant-b"}
+      ],
+      "defaults": {"onVariation": 0, "offVariation": 0},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-json-nested",
+      "name": "Verify JSON Nested",
+      "description": "JSON object variations",
+      "variations": [
+        {"value": {"enabled": true}},
+        {"value": {"enabled": false}}
+      ],
+      "defaults": {"onVariation": 0, "offVariation": 1},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-context-targets",
+      "name": "Verify Context Targets",
+      "description": "contextTargets for account and organization",
+      "variations": [{"value": "default"}, {"value": "account"}, {"value": "org"}],
+      "defaults": {"onVariation": 0, "offVariation": 0},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-rule-rollout",
+      "name": "Verify Rule Rollout",
+      "description": "Rule with percentage rollout (not just fallthrough)",
+      "variations": [{"value": "control"}, {"value": "test"}, {"value": "holdout"}],
+      "defaults": {"onVariation": 0, "offVariation": 0},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-prerequisite",
+      "name": "Verify Prerequisite",
+      "description": "Depends on verify-boolean-simple",
+      "variations": [{"value": true}, {"value": false}],
+      "defaults": {"onVariation": 0, "offVariation": 1},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-rules-and-targets",
+      "name": "Verify Rules And Targets",
+      "description": "Flag with BOTH rules and targets",
+      "variations": [{"value": "a"}, {"value": "b"}, {"value": "c"}],
+      "defaults": {"onVariation": 0, "offVariation": 2},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-single-var",
+      "name": "Verify Single Variation",
+      "description": "Single variation only",
+      "variations": [{"value": "only"}],
+      "defaults": {"onVariation": 0, "offVariation": 0},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-rule-value-replace",
+      "name": "Verify Rule Value Replace",
+      "description": "Single-clause versionName rule - tests ruleValueReplacements value replace (26.3.30 -> 1.0.0)",
+      "variations": [{"value": true}, {"value": false}],
+      "defaults": {"onVariation": 0, "offVariation": 1},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-rule-value-remove",
+      "name": "Verify Rule Value Remove",
+      "description": "Two-clause rule (versionName + country) - tests ruleValueReplacements action:remove drops versionName clause, keeps country",
+      "variations": [{"value": true}, {"value": false}],
+      "defaults": {"onVariation": 0, "offVariation": 1},
+      "tags": ["verify"]
+    },
+    {
+      "key": "verify-rule-value-replace-generic",
+      "name": "Verify Rule Value Replace Generic",
+      "description": "Generic clause value replacement (CVS -> Health100) - tests ruleValueReplacements without attribute filter",
+      "variations": [{"value": true}, {"value": false}],
+      "defaults": {"onVariation": 0, "offVariation": 1},
+      "tags": ["verify"]
+    }
+  ]
+}
