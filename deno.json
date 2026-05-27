@@ -15,7 +15,7 @@
   },
   "importMap": "./config/import_map.json",
   "tasks": {
-    "workflow": "deno run --allow-net --allow-read --allow-write --allow-run src/scripts/launchdarkly-migrations/workflow.ts",
+    "workflow": "deno run --allow-net --allow-read --allow-write --allow-run --allow-env src/scripts/launchdarkly-migrations/workflow.ts",
     "workflow:full": "deno task workflow -- -f examples/workflow-full.yaml",
     "workflow:incremental": "deno task workflow -- -f examples/workflow-extract-migrate-incremental.yaml",
     "source-from-ld": "deno run --allow-net --allow-read --allow-write src/scripts/launchdarkly-migrations/source_from_ld.ts",

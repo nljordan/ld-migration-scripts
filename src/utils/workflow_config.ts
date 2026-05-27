@@ -5,7 +5,7 @@
 export interface WorkflowConfig {
   workflow?: {
     steps?: string[];
-    ignoreCertificateErrors?: boolean;
+    ignoreCertificateErrors?: boolean | string;
   };
   source: {
     projectKey?: string;
@@ -86,14 +86,59 @@ export const PROJECT_LEVEL_STEPS = new Set<string>([
   "revert",
 ]);
 
+/** Coerce YAML project key values (string, number, etc.) to a trimmed string. */
+export function coerceProjectKey(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    const trimmed = String(value).trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  return undefined;
+}
+
 /** Shallow clone of workflow config (extension point for future normalization). */
 export function normalizeWorkflowConfig(raw: WorkflowConfig): WorkflowConfig {
   return { ...raw };
 }
 
-/** Whether TLS certificate validation should be skipped for child Deno processes. */
+/**
+ * Whether TLS certificate validation should be skipped for child Deno processes.
+ * Defaults to true (workflows run behind corporate TLS inspection often fail without this).
+ * Set workflow.ignoreCertificateErrors: false to require valid certificates.
+ */
 export function shouldIgnoreCertificateErrors(config: WorkflowConfig): boolean {
-  return config.workflow?.ignoreCertificateErrors === true;
+  const v = config.workflow?.ignoreCertificateErrors;
+  if (v === false || v === "false") return false;
+  return true;
+}
+
+/** Merge CLI/env overrides into workflow TLS settings. */
+export function applyCertificateErrorOverrides(
+  config: WorkflowConfig,
+  options?: { cliIgnoreCertificateErrors?: boolean },
+): WorkflowConfig {
+  let envEnabled = false;
+  try {
+    const fromEnv = Deno.env.get("LD_WORKFLOW_IGNORE_CERT_ERRORS");
+    envEnabled = fromEnv === "1" || fromEnv === "true";
+  } catch {
+    // No --allow-env (e.g. unit tests); ignore env override
+  }
+  const cliEnabled = options?.cliIgnoreCertificateErrors === true;
+  if (!envEnabled && !cliEnabled) {
+    return config;
+  }
+  return {
+    ...config,
+    workflow: {
+      ...config.workflow,
+      ignoreCertificateErrors: true,
+    },
+  };
 }
 
 /** Builds `deno run` prefix args including optional TLS ignore flag. */
@@ -117,12 +162,12 @@ export function buildDenoRunArgs(
  */
 export function resolveProjectKeys(config: WorkflowConfig): string[] {
   const fromList = config.source.projectKeys
-    ?.map((k) => k.trim())
-    .filter(Boolean);
+    ?.map((k) => coerceProjectKey(k))
+    .filter((k): k is string => k !== undefined);
   if (fromList && fromList.length > 0) {
     return [...new Set(fromList)];
   }
-  const single = config.source.projectKey?.trim();
+  const single = coerceProjectKey(config.source.projectKey);
   if (single) {
     return [single];
   }
@@ -133,7 +178,9 @@ export function resolveProjectKeys(config: WorkflowConfig): string[] {
 
 /** True when config uses a multi-project keys list. */
 export function usesProjectKeysList(config: WorkflowConfig): boolean {
-  return (config.source.projectKeys?.filter((k) => k.trim()).length ?? 0) > 0;
+  return (
+    (config.source.projectKeys?.map((k) => coerceProjectKey(k)).filter(Boolean).length ?? 0) > 0
+  );
 }
 
 /**

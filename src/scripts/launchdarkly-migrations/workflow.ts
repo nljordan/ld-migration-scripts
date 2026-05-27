@@ -10,10 +10,13 @@ import yargs from "https://deno.land/x/yargs@v17.7.2-deno/deno.ts";
 import { parse as parseYaml } from "https://deno.land/std@0.224.0/yaml/parse.ts";
 import * as Colors from "https://deno.land/std@0.149.0/fmt/colors.ts";
 import {
+  applyCertificateErrorOverrides,
   buildDenoRunArgs,
+  coerceProjectKey,
   normalizeWorkflowConfig,
   partitionWorkflowSteps,
   resolveProjectKeys,
+  shouldIgnoreCertificateErrors,
   usesProjectKeysList,
   withProjectKey,
   type WorkflowConfig,
@@ -22,6 +25,7 @@ import {
 
 interface Arguments {
   config?: string;
+  ignoreCertificateErrors?: boolean;
 }
 
 type StepName = WorkflowStepName;
@@ -34,6 +38,11 @@ const DEFAULT_WORKFLOW_STEPS: StepName[] = ["extract-source", "map-members", "mi
 const inputArgs: Arguments = yargs(Deno.args)
   .alias("f", "config")
   .option("config", { type: "string", description: "Path to workflow configuration YAML file" })
+  .option("ignore-certificate-errors", {
+    type: "boolean",
+    description:
+      "Pass --unsafely-ignore-certificate-errors to all child Deno steps (same as workflow.ignoreCertificateErrors in YAML)",
+  })
   .describe("f", "Path to workflow configuration YAML file")
   .parse() as Arguments;
 
@@ -132,7 +141,7 @@ const buildExtractSourceArgs = (config: WorkflowConfig): string[] => {
     config
   );
 
-  let args = [...baseArgs, "-p", config.source.projectKey!];
+  let args = [...baseArgs, "-p", coerceProjectKey(config.source.projectKey)!];
   args = addOptionalArg(args, "--domain", config.source.domain);
   
   // Only extract segments if explicitly enabled AND migration will use them
@@ -221,8 +230,8 @@ const buildProjectKeyMapArg = (config: WorkflowConfig): string | undefined => {
   }
   // Implicit single-pair mapping only when using one projectKey (not projectKeys list)
   if (!usesProjectKeysList(config)) {
-    const src = config.source.projectKey;
-    const dest = config.destination?.projectKey;
+    const src = coerceProjectKey(config.source.projectKey);
+    const dest = coerceProjectKey(config.destination?.projectKey);
     if (src && dest && src !== dest) {
       const implicit = `${src}:${dest}`;
       if (!explicit?.[src]) parts.push(implicit);
@@ -245,8 +254,8 @@ const buildMigrateRolesArgs = (config: WorkflowConfig): string[] => {
 
   let args = addOptionalArg(baseArgs, "--domain", config.destination?.domain);
   args = addOptionalArg(args, "--project-key-map", buildProjectKeyMapArg(config));
-  args = addOptionalArg(args, "--source-project", config.source.projectKey);
-  args = addOptionalArg(args, "--dest-project", config.destination?.projectKey);
+  args = addOptionalArg(args, "--source-project", coerceProjectKey(config.source.projectKey));
+  args = addOptionalArg(args, "--dest-project", coerceProjectKey(config.destination?.projectKey));
   args = addBooleanFlag(args, "--dry-run", accountMigrationDryRun(config));
   args = addOptionalArg(args, "--conflict-prefix", account.conflictPrefix);
   args = addOptionalArg(
@@ -283,6 +292,7 @@ const buildMigrateTeamsArgs = (
   );
 
   let args = addOptionalArg(baseArgs, "--domain", config.destination?.domain);
+  args = addOptionalArg(args, "--source-domain", config.source.domain);
   args = addOptionalArg(args, "--member-mapping", config.memberMapping?.outputFile);
   args = addBooleanFlag(args, "--dry-run", accountMigrationDryRun(config));
   args = addOptionalArg(args, "--conflict-prefix", account.conflictPrefix);
@@ -321,11 +331,11 @@ const runMigrateTeams = async (
  * Validates migration prerequisites
  */
 const validateMigrationConfig = (config: WorkflowConfig): void => {
-  if (!config.source.projectKey?.trim()) {
+  if (!coerceProjectKey(config.source.projectKey)) {
     console.log(Colors.red("Error: Source project key is required for migration step"));
     Deno.exit(1);
   }
-  if (!config.destination?.projectKey?.trim()) {
+  if (!coerceProjectKey(config.destination?.projectKey)) {
     console.log(Colors.red("Error: Destination project key is required for migration step"));
     Deno.exit(1);
   }
@@ -387,8 +397,8 @@ const buildMigrateArgs = (config: WorkflowConfig): string[] => {
 
   const withProjects = [
     ...baseArgs,
-    "-p", config.source.projectKey!,
-    "-d", config.destination!.projectKey!
+    "-p", coerceProjectKey(config.source.projectKey)!,
+    "-d", coerceProjectKey(config.destination!.projectKey)!
   ];
 
   const withMigrationOpts = [...withProjects, ...buildMigrationArgs(config)];
@@ -632,9 +642,13 @@ const printWorkflowHeader = (config: WorkflowConfig, steps: string[]): void => {
   }
   console.log("");
 
-  if (config.workflow?.ignoreCertificateErrors === true) {
+  if (shouldIgnoreCertificateErrors(config)) {
+    const explicit = config.workflow?.ignoreCertificateErrors;
+    const reason = explicit === true || explicit === "true"
+      ? "ignoreCertificateErrors is enabled in config"
+      : "ignoring certificate errors by default (set workflow.ignoreCertificateErrors: false to disable)";
     console.log(Colors.yellow(
-      "TLS: ignoreCertificateErrors is enabled (--unsafely-ignore-certificate-errors on child steps).\n",
+      `TLS: ${reason} — child steps use --unsafely-ignore-certificate-errors.\n`,
     ));
   }
 };
@@ -661,7 +675,10 @@ const getWorkflowSteps = (config: WorkflowConfig): string[] =>
  * Main workflow orchestration function
  */
 const main = async (): Promise<void> => {
-  const config = await loadConfig(configPath);
+  let config = await loadConfig(configPath);
+  config = applyCertificateErrorOverrides(config, {
+    cliIgnoreCertificateErrors: inputArgs.ignoreCertificateErrors === true,
+  });
   const steps = getWorkflowSteps(config);
   
   printWorkflowHeader(config, steps);

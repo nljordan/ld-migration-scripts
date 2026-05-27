@@ -1,24 +1,28 @@
 // deno-lint-ignore-file no-explicit-any
 import { parse } from "https://deno.land/std@0.177.0/flags/mod.ts";
 import * as Colors from "https://deno.land/std@0.149.0/fmt/colors.ts";
-import { getDestinationApiKey } from "../../utils/api_keys.ts";
+import { getDestinationApiKey, getSourceApiKey } from "../../utils/api_keys.ts";
 import {
   ACCOUNT_SOURCE_ROOT,
   DEFAULT_MEMBER_MAPPING_PATH,
   extractTeamCustomRoleKeys,
   extractTeamMaintainerIds,
   extractTeamMemberIds,
+  fetchTeamMemberIds,
   keyFromJsonFilename,
   listJsonFiles,
   mapMemberIds,
+  remapTeamPermissionGrants,
   type MemberMapping,
   type TeamRecord,
   shouldIncludeKey,
+  teamNeedsMemberIdBackfill,
 } from "../../utils/account_iam.ts";
 import {
   applyConflictPrefix,
   ConflictTracker,
   getJson,
+  ldAPIPatchRequestSemantic,
   ldAPIPostRequest,
   ldAPIRequest,
   rateLimitRequest,
@@ -26,6 +30,7 @@ import {
 
 interface MigrateTeamsFlags {
   domain: string;
+  "source-domain"?: string;
   "member-mapping"?: string;
   "dry-run"?: boolean;
   "conflict-prefix"?: string;
@@ -48,16 +53,36 @@ async function teamExists(
   return true;
 }
 
-function buildTeamPostBody(
+async function resolveSourceMemberIds(
   team: TeamRecord,
-  memberMapping: MemberMapping,
-): { body: Record<string, unknown>; skippedMembers: number } {
-  const sourceMemberIds = [
+  teamKey: string,
+  sourceApiKey: string | undefined,
+  sourceDomain: string,
+): Promise<string[]> {
+  let ids = [
     ...new Set([
       ...extractTeamMemberIds(team),
       ...extractTeamMaintainerIds(team),
     ]),
   ];
+
+  if (ids.length === 0 && teamNeedsMemberIdBackfill(team) && sourceApiKey) {
+    console.log(Colors.cyan(
+      `  Fetching source member IDs for ${teamKey} (extract file missing memberIDs; re-run extract-account after upgrade)`,
+    ));
+    ids = await fetchTeamMemberIds(sourceApiKey, sourceDomain, teamKey);
+    const maintainerIds = extractTeamMaintainerIds(team);
+    ids = [...new Set([...ids, ...maintainerIds])];
+  }
+
+  return ids;
+}
+
+function buildTeamPostBody(
+  team: TeamRecord,
+  memberMapping: MemberMapping,
+  sourceMemberIds: string[],
+): { body: Record<string, unknown>; skippedMembers: number; sourceMemberCount: number } {
   const { mapped: memberIDs, skipped } = mapMemberIds(sourceMemberIds, memberMapping);
 
   const body: Record<string, unknown> = {
@@ -69,12 +94,13 @@ function buildTeamPostBody(
   const customRoleKeys = extractTeamCustomRoleKeys(team);
   if (customRoleKeys.length > 0) body.customRoleKeys = customRoleKeys;
   if (memberIDs.length > 0) body.memberIDs = memberIDs;
-  if (team.permissionGrants?.length) body.permissionGrants = team.permissionGrants;
+  const remappedGrants = remapTeamPermissionGrants(team.permissionGrants, memberMapping);
+  if (remappedGrants?.length) body.permissionGrants = remappedGrants;
   if (team.roleAttributes && Object.keys(team.roleAttributes).length > 0) {
     body.roleAttributes = team.roleAttributes;
   }
 
-  return { body, skippedMembers: skipped };
+  return { body, skippedMembers: skipped, sourceMemberCount: sourceMemberIds.length };
 }
 
 async function createTeam(
@@ -94,10 +120,50 @@ async function createTeam(
   }
 }
 
+function buildTeamPatchInstructions(body: Record<string, unknown>): Array<Record<string, unknown>> {
+  const instructions: Array<Record<string, unknown>> = [];
+  const memberIDs = body.memberIDs as string[] | undefined;
+  if (memberIDs && memberIDs.length > 0) {
+    instructions.push({ kind: "replaceMembers", values: memberIDs });
+  }
+  const customRoleKeys = body.customRoleKeys as string[] | undefined;
+  if (customRoleKeys && customRoleKeys.length > 0) {
+    instructions.push({ kind: "addCustomRoles", values: customRoleKeys });
+  }
+  return instructions;
+}
+
+async function updateExistingTeam(
+  apiKey: string,
+  domain: string,
+  teamKey: string,
+  body: Record<string, unknown>,
+  dryRun: boolean,
+): Promise<boolean> {
+  const instructions = buildTeamPatchInstructions(body);
+  if (instructions.length === 0) {
+    console.log(Colors.yellow(`  No mapped members or roles to apply`));
+    return false;
+  }
+
+  if (dryRun) {
+    console.log(Colors.gray(`    [DRY RUN] Would PATCH teams/${teamKey} (${instructions.length} instruction(s))`));
+    return true;
+  }
+
+  const req = ldAPIPatchRequestSemantic(apiKey, domain, `teams/${teamKey}`, { instructions });
+  const response = await rateLimitRequest(req, "teams");
+  if (!response.ok) {
+    throw new Error(`PATCH teams/${teamKey} failed: ${response.status} ${await response.text()}`);
+  }
+  return true;
+}
+
 async function main(): Promise<void> {
   const flags = parse(Deno.args, {
     string: [
       "domain",
+      "source-domain",
       "member-mapping",
       "conflict-prefix",
       "include-teams",
@@ -109,6 +175,7 @@ async function main(): Promise<void> {
   }) as MigrateTeamsFlags;
 
   const domain = flags.domain ?? "app.launchdarkly.com";
+  const sourceDomain = flags["source-domain"] ?? "app.launchdarkly.com";
   const dryRun = flags["dry-run"] === true;
   const conflictPrefix = flags["conflict-prefix"] ?? "";
   const mappingPath = flags["member-mapping"] ?? DEFAULT_MEMBER_MAPPING_PATH;
@@ -126,8 +193,17 @@ async function main(): Promise<void> {
   }
 
   const apiKey = await getDestinationApiKey();
+  let sourceApiKey: string | undefined;
+  try {
+    sourceApiKey = await getSourceApiKey();
+  } catch {
+    console.log(Colors.yellow("Warning: No source API key — cannot backfill team member IDs from source API"));
+  }
+
   const conflictTracker = new ConflictTracker();
   const mapping = memberMapping ?? {};
+  const mappedDestCount = Object.values(mapping).filter((id) => id != null).length;
+  console.log(Colors.cyan(`Member mapping: ${Object.keys(mapping).length} source IDs, ${mappedDestCount} mapped to destination`));
 
   const files = await listJsonFiles(sourceDir);
   if (files.length === 0) {
@@ -139,6 +215,7 @@ async function main(): Promise<void> {
   if (dryRun) console.log(Colors.yellow("DRY RUN — no changes will be applied"));
 
   let created = 0;
+  let updated = 0;
   let skipped = 0;
 
   for (const filePath of files) {
@@ -149,7 +226,27 @@ async function main(): Promise<void> {
     }
 
     const team = JSON.parse(await Deno.readTextFile(filePath)) as TeamRecord;
-    const { body, skippedMembers } = buildTeamPostBody(team, mapping);
+    const sourceMemberIds = await resolveSourceMemberIds(
+      team,
+      sourceKey,
+      sourceApiKey,
+      sourceDomain,
+    );
+    const { body, skippedMembers, sourceMemberCount } = buildTeamPostBody(
+      team,
+      mapping,
+      sourceMemberIds,
+    );
+
+    if (sourceMemberCount === 0 && (team.members?.totalCount ?? 0) > 0) {
+      console.log(Colors.yellow(
+        `\n${sourceKey}: team has ${team.members!.totalCount} member(s) on source but no member IDs in extract — re-run extract-account`,
+      ));
+    } else if (sourceMemberCount > 0 && (body.memberIDs as string[] | undefined)?.length === 0) {
+      console.log(Colors.yellow(
+        `\n${sourceKey}: ${sourceMemberCount} source member(s) but none mapped — check FedRAMP users exist with same emails (map-members)`,
+      ));
+    }
 
     let destKey = sourceKey;
     const exists = await teamExists(apiKey, domain, destKey);
@@ -171,8 +268,20 @@ async function main(): Promise<void> {
           conflictPrefix,
         });
       } else {
-        console.log(Colors.gray(`\n${sourceKey}: already exists — skipping`));
-        skipped++;
+        console.log(`\n${sourceKey}: already exists — updating members`);
+        if (skippedMembers > 0) {
+          console.log(Colors.yellow(`  ${skippedMembers} member(s) unmapped and omitted`));
+        }
+        const memberCount = (body.memberIDs as string[] | undefined)?.length ?? 0;
+        console.log(Colors.gray(`  Members: ${memberCount}, roles: ${
+          (body.customRoleKeys as string[] | undefined)?.length ?? 0
+        }`));
+        const didUpdate = await updateExistingTeam(apiKey, domain, destKey, body, dryRun);
+        if (didUpdate) {
+          updated++;
+        } else {
+          skipped++;
+        }
         continue;
       }
     }
@@ -190,7 +299,7 @@ async function main(): Promise<void> {
     created++;
   }
 
-  console.log(Colors.green(`\nTeams: ${created} created, ${skipped} skipped`));
+  console.log(Colors.green(`\nTeams: ${created} created, ${updated} updated, ${skipped} skipped`));
   if (conflictTracker.hasConflicts()) {
     console.log(conflictTracker.getReport());
   }

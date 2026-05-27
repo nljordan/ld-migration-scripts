@@ -1,12 +1,15 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildProjectKeyMapping,
+  extractTeamMemberIds,
   isUserCreatedRole,
   mapMemberIds,
   parseProjectKeyMapArg,
   remapPolicyResources,
   remapResourceString,
+  remapTeamPermissionGrants,
   shouldIncludeKey,
+  teamNeedsMemberIdBackfill,
 } from "./account_iam.ts";
 
 Deno.test("isUserCreatedRole skips preset bundle roles", () => {
@@ -62,6 +65,32 @@ Deno.test("shouldIncludeKey respects include and exclude", () => {
   assertEquals(shouldIncludeKey("b", undefined, ["b"]), false);
   assertEquals(shouldIncludeKey("a", ["a"], undefined), true);
   assertEquals(shouldIncludeKey("b", ["a"], undefined), false);
+});
+
+Deno.test("extractTeamMemberIds uses denormalized memberIDs from extract", () => {
+  assertEquals(
+    extractTeamMemberIds({ key: "t", name: "T", memberIDs: ["a", "b"] }),
+    ["a", "b"],
+  );
+});
+
+Deno.test("teamNeedsMemberIdBackfill when only totalCount present", () => {
+  assertEquals(
+    teamNeedsMemberIdBackfill({ key: "t", name: "T", members: { totalCount: 3 } }),
+    true,
+  );
+  assertEquals(
+    teamNeedsMemberIdBackfill({ key: "t", name: "T", memberIDs: ["x"], members: { totalCount: 3 } }),
+    false,
+  );
+});
+
+Deno.test("remapTeamPermissionGrants maps memberIDs", () => {
+  const grants = remapTeamPermissionGrants(
+    [{ actions: ["updateTeamName"], memberIDs: ["src1", "src2"] }],
+    { src1: "dest1", src2: null },
+  ) as Array<{ memberIDs: string[] }>;
+  assertEquals(grants[0].memberIDs, ["dest1"]);
 });
 
 Deno.test("mapMemberIds omits unmapped", () => {

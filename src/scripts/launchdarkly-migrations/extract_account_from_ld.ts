@@ -6,6 +6,8 @@ import { ldAPIRequest, rateLimitRequest } from "../../utils/utils.ts";
 import {
   ACCOUNT_SOURCE_ROOT,
   type CustomRoleRecord,
+  extractTeamMaintainerIds,
+  fetchTeamMemberIds,
   isUserCreatedRole,
   paginateLdCollection,
   type TeamRecord,
@@ -99,9 +101,12 @@ async function extractTeams(
   let written = 0;
   for (const summary of summaries) {
     const detail = await fetchTeamDetail(apiKey, domain, summary.key);
+    const memberIds = await fetchTeamMemberIds(apiKey, domain, summary.key);
+    const maintainerIds = extractTeamMaintainerIds(detail);
+    detail.memberIDs = [...new Set([...memberIds, ...maintainerIds])];
     await writeJson(`${teamsDir}/${summary.key}.json`, detail);
     written++;
-    console.log(Colors.gray(`  ✓ ${summary.key}`));
+    console.log(Colors.gray(`  ✓ ${summary.key} (${detail.memberIDs.length} member(s))`));
   }
   console.log(Colors.green(`Wrote ${written} team file(s) to ${teamsDir}`));
 }

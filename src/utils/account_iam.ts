@@ -45,6 +45,11 @@ export interface TeamMemberRef {
   [key: string]: unknown;
 }
 
+interface MemberListItem {
+  _id: string;
+  email?: string;
+}
+
 export interface TeamRoleRef {
   key: string;
   name?: string;
@@ -210,11 +215,35 @@ export function sanitizeRolePayload(role: CustomRoleRecord): CustomRoleRecord {
   return copy;
 }
 
-/** Collects member _id values from a team record (expanded or flat). */
+/**
+ * Fetches all member IDs for a team via GET /members?filter=team:{teamKey}.
+ * Required because expand=members on GET team only returns totalCount, not member IDs.
+ */
+export async function fetchTeamMemberIds(
+  apiKey: string,
+  domain: string,
+  teamKey: string,
+): Promise<string[]> {
+  const filter = `team:${teamKey}`;
+  const members = await paginateLdCollection<MemberListItem>(
+    apiKey,
+    domain,
+    `members?filter=${encodeURIComponent(filter)}&limit=100`,
+    "members",
+  );
+  return members.map((m) => m._id).filter(Boolean);
+}
+
+/** Collects member _id values from a team record (denormalized memberIDs or expanded items). */
 export function extractTeamMemberIds(team: TeamRecord): string[] {
   if (team.memberIDs?.length) return [...team.memberIDs];
   const fromMembers = team.members?.items?.map((m) => m._id).filter(Boolean) ?? [];
   return fromMembers as string[];
+}
+
+/** True when extracted team JSON is missing member IDs but reports members exist. */
+export function teamNeedsMemberIdBackfill(team: TeamRecord): boolean {
+  return extractTeamMemberIds(team).length === 0 && (team.members?.totalCount ?? 0) > 0;
 }
 
 /** Collects maintainer _id values from expanded team data. */
@@ -247,6 +276,24 @@ export function mapMemberIds(
     }
   }
   return { mapped, skipped };
+}
+
+/** Remaps memberIDs inside team permissionGrants for destination account. */
+export function remapTeamPermissionGrants(
+  grants: unknown[] | undefined,
+  mapping: MemberMapping,
+): unknown[] | undefined {
+  if (!grants?.length) return grants;
+  return grants.map((grant) => {
+    if (!grant || typeof grant !== "object") return grant;
+    const g = { ...(grant as Record<string, unknown>) };
+    const raw = g.memberIDs;
+    if (Array.isArray(raw)) {
+      const { mapped } = mapMemberIds(raw as string[], mapping);
+      g.memberIDs = mapped;
+    }
+    return g;
+  });
 }
 
 /** Lists `.json` file paths in a directory (non-recursive). */
